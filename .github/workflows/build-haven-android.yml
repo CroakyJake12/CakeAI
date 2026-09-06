@@ -141,8 +141,13 @@ jobs:
 
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           test -x "$apksigner"
-          "$apksigner" verify --print-certs "$primary_apk" > artifacts/android/APK-CERTIFICATE.txt
-          grep -E 'Signer #1 certificate SHA-256 digest:' artifacts/android/APK-CERTIFICATE.txt
+          if [ "$SIGNING_MODE" = "persistent-secret-keystore" ]; then
+            "$apksigner" verify --print-certs "$primary_apk" > artifacts/android/APK-CERTIFICATE.txt
+            grep -E 'Signer #1 certificate SHA-256 digest:' artifacts/android/APK-CERTIFICATE.txt
+          else
+            "$apksigner" verify "$primary_apk"
+            printf 'signing_mode=%s\ncertificate_check=skipped_for_ephemeral_debug\n' "$SIGNING_MODE" > artifacts/android/APK-CERTIFICATE.txt
+          fi
 
       - name: Upload build logs
         if: always()
