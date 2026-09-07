@@ -778,9 +778,12 @@ int main(int argc, char** argv)
             return 68;
 
         kit->pClass->runLoop(kit, clientPoll, clientWake, &service);
-        if (kit->pClass->destroy)
-            kit->pClass->destroy(kit);
 
+        // LibreOffice 24.2.7's unipoll loop has already unwound its process-scoped
+        // engine state here. Explicitly destroying the top-level kit after that loop
+        // produced an observed post-Shutdown SIGSEGV in CI. Keep document/socket
+        // cleanup explicit in EngineService and let process exit reclaim the kit,
+        // matching the already-green standalone semantic probe lifecycle.
         std::cout << "PASS: isolated Haven Write helper exited cleanly\n";
         return 0;
     }
