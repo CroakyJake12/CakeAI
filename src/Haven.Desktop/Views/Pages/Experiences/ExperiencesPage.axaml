@@ -1,0 +1,6 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:backend="using:Haven.Desktop.HavenUI.Backend"
+             x:Class="Haven.Desktop.Views.Pages.Experiences.ExperiencesPage">
+  <backend:HavenSceneControl x:Name="Scene" />
+</UserControl>
