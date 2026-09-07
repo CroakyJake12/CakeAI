@@ -775,6 +775,7 @@ void clientWake(void* data)
 {
     (void)data;
 }
+}
 
 int main(int argc, char** argv)
 {
