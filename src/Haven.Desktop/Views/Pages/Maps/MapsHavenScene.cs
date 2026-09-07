@@ -28,7 +28,7 @@ internal sealed class MapsHavenScene : IDisposable
     public MapsHavenScene()
     {
         Root = new Page { Name = "Maps.Root", Layout = HavenLayout.Grid, Columns = "1fr", Rows = "auto auto 1fr auto" };
-        Set(Root, HavenProperties.Padding, HavenThickness.Parse("24px 28px"));
+        Set(Root, HavenProperties.Padding, HavenThickness.Parse("28px 32px"));
         Set(Root, HavenProperties.Gap, HavenLength.Px(14));
         Set(Root, HavenProperties.Background, "Transparent");
 
