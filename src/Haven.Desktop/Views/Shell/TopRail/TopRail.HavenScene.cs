@@ -10,14 +10,17 @@ public sealed partial class TopRail
     private TopRailFinalScene? _havenOwnedScene;
     private IReadOnlyList<TopRailTab> _havenTabs = [];
     private bool _havenAnchorSubscriptionsWired;
+    private TaskbarShelfState _shelfState = TaskbarShelfState.Standard;
 
     internal HavenSceneControl SceneHost => HavenScene;
     internal TopRailFinalScene? HavenOwnedScene => _havenOwnedScene;
+    internal TaskbarShelfState ShelfState => _shelfState;
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
         EnsureHavenOwnedScene();
+        UpdateTaskbarShelfState(Bounds.Width);
     }
 
     private void EnsureHavenOwnedScene()
@@ -25,6 +28,7 @@ public sealed partial class TopRail
         if (_havenOwnedScene is null)
         {
             _havenOwnedScene = new TopRailFinalScene();
+            TaskbarShelfLayout.Apply(_havenOwnedScene, _shelfState);
             HavenScene.Root = _havenOwnedScene.Root;
             _havenOwnedScene.HomeRequested += (_, _) => InvokeHomeAction();
             _havenOwnedScene.NewTabRequested += (_, _) => InvokeNewTabAction();
@@ -44,11 +48,21 @@ public sealed partial class TopRail
                 Fire("TopRail.Tabs.CloseTab");
                 TabCloseRequested?.Invoke(this, key);
             };
+            SizeChanged += (_, _) => UpdateTaskbarShelfState(Bounds.Width);
         }
 
         WireHavenAnchorSubscriptions();
         SyncHavenSceneFromAnchors();
         _havenOwnedScene.SetTabs(_havenTabs);
+    }
+
+    private void UpdateTaskbarShelfState(double width)
+    {
+        if (_havenOwnedScene is null || width <= 0d) return;
+        var next = TaskbarShelfLayout.Resolve(width);
+        if (next == _shelfState) return;
+        _shelfState = next;
+        TaskbarShelfLayout.Apply(_havenOwnedScene, next);
     }
 
     private void SyncHavenTabs(IReadOnlyList<TopRailTab> tabs)

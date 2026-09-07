@@ -29,7 +29,6 @@ internal sealed class ActionGraphSurface : HavenElement, IHavenDrawCommandSource
     private HavenPoint _panStartScreen;
     private double _panStartPanX;
     private double _panStartPanY;
-    private bool _disposed;
 
     public ActionGraphSurface()
     {

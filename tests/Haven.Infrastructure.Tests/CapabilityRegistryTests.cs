@@ -29,6 +29,25 @@ public sealed class CapabilityRegistryTests : IDisposable
     }
 
     [Fact]
+    public async Task First_registry_read_seeds_all_built_ins_with_one_connection()
+    {
+        var database = new SqliteDatabase(_paths);
+        await new ConversationProductionDatabase(database).InitializeAsync(CancellationToken.None);
+        var factory = new CountingConnectionFactory(database);
+        var repository = new CapabilityRepository(factory);
+
+        var first = await repository.GetCapabilitiesAsync(CancellationToken.None);
+
+        Assert.Equal(CapabilityRegistryCatalog.BuiltIns.Count, first.Count);
+        Assert.Equal(1, factory.OpenCount);
+
+        var second = await repository.GetCapabilitiesAsync(CancellationToken.None);
+
+        Assert.Equal(first.Count, second.Count);
+        Assert.Equal(2, factory.OpenCount);
+    }
+
+    [Fact]
     public async Task Discovery_filters_by_current_platform_and_keeps_general_first()
     {
         var database = new SqliteDatabase(_paths);
@@ -51,6 +70,19 @@ public sealed class CapabilityRegistryTests : IDisposable
     }
 
     public void Dispose() => _paths.Dispose();
+
+    private sealed class CountingConnectionFactory(ISqliteConnectionFactory inner) : ISqliteConnectionFactory
+    {
+        private int _openCount;
+
+        public int OpenCount => Volatile.Read(ref _openCount);
+
+        public async Task<Microsoft.Data.Sqlite.SqliteConnection> OpenAsync(CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _openCount);
+            return await inner.OpenAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     private sealed class TestPaths : IAppPaths, IDisposable
     {

@@ -46,6 +46,7 @@
     <ProjectReference Include="../Haven.Browser/Haven.Browser.csproj" />
     <!-- The linked desktop source includes the Avalonia backend/host for platform-neutral Haven.UI. -->
     <ProjectReference Include="../Haven.UI/Haven.UI.csproj" />
+    <ProjectReference Include="../Haven.Android.Hui/Haven.Android.Hui.csproj" />
     <!-- Legacy Haven.Automations project retired; scheduled Tasks live in Haven.Application. -->
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Android" />

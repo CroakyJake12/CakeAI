@@ -82,7 +82,7 @@ public sealed partial class ActionGraphPage : UserControl, IDisposable
         _ = LoadHistoryAsync();
     }
 
-    internal ActionGraphHavenScene Scene => _scene;
+    internal ActionGraphHavenScene HavenScene => _scene;
     internal ActionGraphSurface Surface => _surface;
     internal HavenSceneControl SceneHost => Scene;
 

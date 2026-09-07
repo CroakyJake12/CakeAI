@@ -1,0 +1,43 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="HavenOS.Images.MainWindow"
+        Title="Images"
+        Width="1080"
+        Height="760"
+        MinWidth="720"
+        MinHeight="520">
+  <Grid Margin="24" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="16">
+    <Grid ColumnDefinitions="*,Auto">
+      <StackPanel Spacing="4">
+        <TextBlock Text="Images" FontSize="28" FontWeight="SemiBold" />
+        <TextBlock Text="Open a local image and browse supported images in the same folder." Opacity="0.72" />
+      </StackPanel>
+      <Button x:Name="OpenButton" Grid.Column="1" VerticalAlignment="Center" Padding="18,10">Open image</Button>
+    </Grid>
+
+    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8">
+      <Button x:Name="PreviousButton" IsEnabled="False">Previous</Button>
+      <Button x:Name="NextButton" IsEnabled="False">Next</Button>
+      <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="8,0,0,0" Text="No image open" TextTrimming="CharacterEllipsis" />
+    </StackPanel>
+
+    <Border Grid.Row="2" BorderBrush="#55808080" BorderThickness="1" CornerRadius="18" Padding="18">
+      <Grid>
+        <Image x:Name="PreviewImage"
+               Stretch="Uniform"
+               HorizontalAlignment="Stretch"
+               VerticalAlignment="Stretch"
+               IsVisible="False" />
+        <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+          <TextBlock Text="Open an image to preview it" FontSize="22" FontWeight="SemiBold" HorizontalAlignment="Center" />
+          <TextBlock Text="Images does not edit, generate, export, or persist changes in this first slice." Opacity="0.68" HorizontalAlignment="Center" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <Grid Grid.Row="3" ColumnDefinitions="*,Auto" ColumnSpacing="16">
+      <TextBlock x:Name="FileNameText" Text="Nothing selected" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+      <TextBlock x:Name="MetadataText" Grid.Column="1" Text="—" Opacity="0.72" />
+    </Grid>
+  </Grid>
+</Window>

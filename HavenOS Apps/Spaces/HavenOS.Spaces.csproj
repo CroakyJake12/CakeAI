@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>HavenOS.Spaces</AssemblyName>
+    <RootNamespace>HavenOS.Apps.Spaces</RootNamespace>
+    <Platforms>AnyCPU;x64</Platforms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="Tests\**\*.cs" />
+    <ProjectReference Include="..\..\src\Haven.Application\Haven.Application.csproj" />
+    <ProjectReference Include="..\..\src\Haven.Core\Haven.Core.csproj" />
+  </ItemGroup>
+</Project>

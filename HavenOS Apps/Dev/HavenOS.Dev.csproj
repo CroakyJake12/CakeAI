@@ -1,0 +1,16 @@
+<!--
+  FILE DOCUMENTATION
+  Where: HavenOS Apps/Dev/HavenOS.Dev.csproj, the standalone HavenOS Dev app surface package.
+  What: Declares the bounded Dev surface and its dependencies on existing platform-neutral developer contracts.
+  Why: Keeps Dev independently buildable without moving shared HUI, Studio, Terminal, or editor-extension implementation into the app.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>HavenOS.Apps.Dev</AssemblyName>
+    <RootNamespace>HavenOS.Apps.Dev</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Haven.Application\Haven.Application.csproj" />
+    <ProjectReference Include="..\..\src\Haven.Core\Haven.Core.csproj" />
+  </ItemGroup>
+</Project>

@@ -13,7 +13,7 @@ public sealed class TrailingDebouncer(TimeSpan delay, TimeProvider? timeProvider
     private long _scheduled;
     private bool _disposed;
 
-    /// <summary>Schedules the callback to run once after <paramref name="delay"/> of quiet time.</summary>
+    /// <summary>Schedules the callback to run once after the configured quiet-time delay.</summary>
     public void Schedule(Action callback)
     {
         ArgumentNullException.ThrowIfNull(callback);

@@ -47,7 +47,7 @@ public static class ButtonDefaults
 }
 
 /// <summary>One canonical Haven Button. Variants are properties, not rendering primitives.</summary>
-public sealed class Button : HavenElement
+public sealed class Button : HavenElement, IHavenKeyboardInputTarget
 {
     public static readonly HavenProperty<ButtonVariant> VariantProperty = HavenPropertyRegistry.Register(new HavenProperty<ButtonVariant>("Button.Variant", ButtonVariant.Primary));
     public static readonly HavenProperty<string> ContentProperty = HavenPropertyRegistry.Register(new HavenProperty<string>("Button.Content", string.Empty));
@@ -77,6 +77,27 @@ public sealed class Button : HavenElement
     {
         get => GetValue(VariantProperty);
         set { SetValue(VariantProperty, value); ApplyDefaults(); ApplyState(); }
+    }
+
+    public bool KeyDown(HavenKeyInput input)
+    {
+        if (input.Key is not (HavenKey.Enter or HavenKey.Space)) return false;
+        if (State.HasFlag(HavenElementState.Disabled))
+        {
+            SetState(HavenElementState.Pressed, false);
+            return true;
+        }
+        SetState(HavenElementState.Pressed, true);
+        return true;
+    }
+
+    public bool KeyUp(HavenKeyInput input)
+    {
+        if (input.Key is not (HavenKey.Enter or HavenKey.Space)) return false;
+        var wasPressed = State.HasFlag(HavenElementState.Pressed);
+        SetState(HavenElementState.Pressed, false);
+        if (wasPressed && !State.HasFlag(HavenElementState.Disabled)) Invoke();
+        return true;
     }
 
     public override HavenComponentMetadata Metadata => new("Button", "Components/Button/Button.cs", [ButtonDefaults.SystemClass], [ButtonDefaults.HoverTransition, ButtonDefaults.PressedTransition, ButtonDefaults.ReleaseAnimation], "Variants, defaults and interactive-state mapping are defined beside the component.");

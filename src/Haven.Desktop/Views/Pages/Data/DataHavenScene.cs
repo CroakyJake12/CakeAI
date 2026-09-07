@@ -89,7 +89,7 @@ internal sealed class DataHavenScene : IDisposable
         Landing.SetValue(HavenProperties.Padding, HavenThickness.Parse("30px"));
         Landing.SetValue(HavenProperties.Gap, HavenLength.Px(14));
         var landingTitle = new HavenText("Start with Data") { Name = "Data.Landing.Title", Level = TextLevel.H1 };
-        var landingSubtitle = new HavenText("Create a workbook or bring in an existing Excel file. Your workbook opens in the full Data editor when it is ready.") { Name = "Data.Landing.Subtitle", Level = TextLevel.Body };
+        var landingSubtitle = new HavenText("Create a workbook or bring in an existing Excel file. Your workbook opens in the full Data editor when it is ready.") { Name = "Data.Landing.Subtitle", Level = TextLevel.Paragraph };
         landingSubtitle.SetValue(HavenProperties.Foreground, "TextSecondary");
         var landingActions = new Container { Name = "Data.Landing.Actions", Layout = HavenLayout.Horizontal };
         landingActions.SetValue(HavenProperties.Gap, HavenLength.Px(10));

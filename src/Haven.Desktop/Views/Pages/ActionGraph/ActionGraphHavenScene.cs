@@ -261,8 +261,8 @@ internal sealed class ActionGraphHavenScene
         var zoomCluster = new Container { Name = "ActionGraph.Zoom.Cluster", Layout = HavenLayout.Horizontal };
         ZoomCluster = zoomCluster;
         zoomCluster.SetValue(HavenProperties.LayoutParticipation, HavenLayoutParticipation.Overlay);
-        zoomCluster.SetValue(HavenProperties.HorizontalAlignment, HavenHorizontalAlignment.Right);
-        zoomCluster.SetValue(HavenProperties.VerticalAlignment, HavenVerticalAlignment.Bottom);
+        zoomCluster.SetValue(HavenProperties.HorizontalAlignment, HavenHorizontalAlignment.End);
+        zoomCluster.SetValue(HavenProperties.VerticalAlignment, HavenVerticalAlignment.End);
         zoomCluster.SetValue(HavenProperties.Margin, HavenThickness.Parse("0px 0px 12px 12px"));
         zoomCluster.SetValue(HavenProperties.Padding, HavenThickness.Parse("5px"));
         zoomCluster.SetValue(HavenProperties.Gap, HavenLength.Px(4));
@@ -409,7 +409,7 @@ internal sealed class ActionGraphHavenScene
 
     public void SetZoomPercent(double zoom)
     {
-        ZoomLabel.Content = Math.Round(zoom * 100, System.Globalization.CultureInfo.InvariantCulture).ToString(System.Globalization.CultureInfo.InvariantCulture) + "%";
+        ZoomLabel.Content = Math.Round(zoom * 100).ToString(System.Globalization.CultureInfo.InvariantCulture) + "%";
     }
 
     public void SetStatus(string message) => StatusText.Content = message ?? string.Empty;
