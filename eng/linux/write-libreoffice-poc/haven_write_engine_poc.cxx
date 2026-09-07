@@ -79,6 +79,7 @@ struct PendingCommand
     Opcode opcode;
     std::uint64_t requestId;
     std::string unoCommand;
+    std::string expectedSelectionText;
     bool completed = false;
     bool failed = false;
     std::chrono::steady_clock::time_point deadline;
@@ -136,9 +137,8 @@ public:
     {
         // LibreOffice 24.2.7 showed repeatable post-Shutdown crashes when LOK
         // document/kit destruction was attempted from or immediately after the
-        // external unipoll loop. This one-document PoC therefore makes the OS
-        // process the LOK reclamation boundary while still explicitly cleaning
-        // up the helper's own IPC resources.
+        // external unipoll loop. This one-document PoC therefore makes process
+        // exit the LOK reclamation boundary while explicitly cleaning our IPC.
         m_document = nullptr;
         m_pending.reset();
         closeClient();
@@ -206,7 +206,7 @@ public:
                     static_cast<std::uint16_t>(m_pending->opcode),
                     m_pending->requestId,
                     Status::EngineFailure,
-                    "semantic command completion deadline expired");
+                    "command completion deadline expired");
                 m_pending.reset();
                 return 1;
             }
@@ -218,11 +218,9 @@ public:
         if (m_clientFd >= 0)
             descriptors[count++] = pollfd{m_clientFd, POLLIN | POLLHUP | POLLERR, 0};
 
-        int timeoutMs = 0;
-        if (!m_pending)
-        {
-            timeoutMs = timeoutUs < 0 ? 100 : std::clamp(timeoutUs / 1000, 0, 100);
-        }
+        const int timeoutMs = m_pending
+            ? 0
+            : (timeoutUs < 0 ? 100 : std::clamp(timeoutUs / 1000, 0, 100));
 
         const int result = ::poll(descriptors.data(), count, timeoutMs);
         if (result < 0)
@@ -402,10 +400,10 @@ private:
                 handleInsertText(requestId, payload);
                 break;
             case Opcode::SelectAll:
-                handleSemanticCommand(opcode, requestId, payload, ".uno:SelectAll");
+                handleSemanticCommand(opcode, requestId, payload, ".uno:SelectAll", std::string(kSemanticMarker));
                 break;
             case Opcode::Bold:
-                handleSemanticCommand(opcode, requestId, payload, ".uno:Bold");
+                handleSemanticCommand(opcode, requestId, payload, ".uno:Bold", {});
                 break;
             case Opcode::Save:
                 handleSave(requestId, payload);
@@ -497,8 +495,8 @@ private:
             && m_document->pClass->postUnoCommand
             && LIBREOFFICEKIT_DOCUMENT_HAS(m_document, getTextSelection)
             && m_document->pClass->getTextSelection
-            && LIBREOFFICEKIT_DOCUMENT_HAS(m_document, setClipboard)
-            && m_document->pClass->setClipboard
+            && LIBREOFFICEKIT_DOCUMENT_HAS(m_document, paste)
+            && m_document->pClass->paste
             && m_document->pClass->saveAs;
     }
 
@@ -530,7 +528,6 @@ private:
         if (!hasRequiredDocumentApi()
             || m_document->pClass->getDocumentType(m_document) != LOK_DOCTYPE_TEXT)
         {
-            // LOK lifetime remains process-scoped in this disposable helper.
             m_document = nullptr;
             sendResponse(static_cast<std::uint16_t>(Opcode::Open), requestId, Status::EngineFailure, "Writer document load/API validation failed");
             return;
@@ -559,28 +556,31 @@ private:
             return;
         }
 
-        const char* mimeTypes[] = {"text/plain;charset=utf-8"};
-        const size_t sizes[] = {payload.size()};
-        const char* streams[] = {payload.data()};
-        if (!m_document->pClass->setClipboard(m_document, 1, mimeTypes, sizes, streams))
+        if (!m_document->pClass->paste(
+                m_document,
+                "text/plain;charset=utf-8",
+                payload.data(),
+                payload.size()))
         {
-            sendResponse(static_cast<std::uint16_t>(Opcode::InsertText), requestId, Status::EngineFailure, "Writer setClipboard failed");
+            sendResponse(static_cast<std::uint16_t>(Opcode::InsertText), requestId, Status::EngineFailure, "Writer paste failed");
             return;
         }
 
-        // LOK paste() dispatches .uno:Paste without a completion listener.
-        // Across IPC that allowed the client to issue SelectAll before the edit
-        // was observably complete on the minimal runtime image. Split the same
-        // operation into setClipboard + notifying .uno:Paste and do not answer
-        // InsertText until LOK_CALLBACK_UNO_COMMAND_RESULT arrives.
-        beginCommand(Opcode::InsertText, requestId, ".uno:Paste");
+        // LOK paste() itself has no completion listener. Use an allow-listed,
+        // callback-driven SelectAll as an observable FIFO fence, then prove the
+        // completed selection contains the exact inserted payload before the
+        // helper acknowledges InsertText. This intentionally leaves the PoC
+        // selection expanded; a production helper must preserve desired caret/
+        // selection semantics with a non-mutating completion mechanism.
+        beginCommand(Opcode::InsertText, requestId, ".uno:SelectAll", payload);
     }
 
     void handleSemanticCommand(
         Opcode opcode,
         std::uint64_t requestId,
         const std::string& payload,
-        std::string unoCommand)
+        std::string unoCommand,
+        std::string expectedSelectionText)
     {
         if (!payload.empty())
         {
@@ -592,15 +592,20 @@ private:
             sendResponse(static_cast<std::uint16_t>(opcode), requestId, Status::InvalidState, "no document is open");
             return;
         }
-        beginCommand(opcode, requestId, std::move(unoCommand));
+        beginCommand(opcode, requestId, std::move(unoCommand), std::move(expectedSelectionText));
     }
 
-    void beginCommand(Opcode opcode, std::uint64_t requestId, std::string unoCommand)
+    void beginCommand(
+        Opcode opcode,
+        std::uint64_t requestId,
+        std::string unoCommand,
+        std::string expectedSelectionText)
     {
         m_pending = PendingCommand{
             opcode,
             requestId,
             std::move(unoCommand),
+            std::move(expectedSelectionText),
             false,
             false,
             std::chrono::steady_clock::now() + kCommandDeadline,
@@ -627,13 +632,7 @@ private:
             return;
         }
 
-        if (pending.opcode == Opcode::InsertText)
-        {
-            sendResponse(static_cast<std::uint16_t>(pending.opcode), pending.requestId, Status::Ok, "text-inserted");
-            return;
-        }
-
-        if (pending.opcode == Opcode::SelectAll)
+        if (pending.opcode == Opcode::InsertText || pending.opcode == Opcode::SelectAll)
         {
             char* usedMimeType = nullptr;
             const auto selectedText = takeString(
@@ -643,16 +642,25 @@ private:
                     "text/plain;charset=utf-8",
                     &usedMimeType));
             const auto actualMimeType = takeString(m_kit, usedMimeType);
-            if (selectedText.find(kSemanticMarker) == std::string::npos)
+
+            if (pending.expectedSelectionText.empty()
+                || selectedText.find(pending.expectedSelectionText) == std::string::npos)
             {
-                std::cerr << "SelectAll completed but IPC marker was absent; selected bytes="
+                std::cerr << "Selection fence completed but expected text was absent; selected bytes="
                           << selectedText.size() << '\n';
-                sendResponse(static_cast<std::uint16_t>(pending.opcode), pending.requestId, Status::EngineFailure, "completed selection did not contain IPC proof marker");
+                sendResponse(static_cast<std::uint16_t>(pending.opcode), pending.requestId, Status::EngineFailure, "completed selection did not contain expected text");
                 return;
             }
 
-            std::cout << "Helper selected text after callback: " << selectedText.size()
+            std::cout << "Helper verified selected text after callback: " << selectedText.size()
                       << " bytes mime=" << (actualMimeType.empty() ? "unknown" : actualMimeType) << '\n';
+
+            if (pending.opcode == Opcode::InsertText)
+            {
+                sendResponse(static_cast<std::uint16_t>(pending.opcode), pending.requestId, Status::Ok, "text-inserted");
+                return;
+            }
+
             sendResponse(static_cast<std::uint16_t>(pending.opcode), pending.requestId, Status::Ok, selectedText);
             return;
         }
@@ -766,7 +774,6 @@ int clientPoll(void* data, int timeoutUs)
 void clientWake(void* data)
 {
     (void)data;
-}
 }
 
 int main(int argc, char** argv)
