@@ -1,12 +1,14 @@
 <Container Name="ChatboxRoot" Layout="Vertical" Width="100%" Gap="6px" Padding="7px" Background="SurfaceRaised" Radius="28px" Shadow="Card">
   <Container Name="AttachmentChips" Layout="Horizontal" Width="100%" Height="34px" MaxHeight="34px" Overflow="Scroll" Clip="true" Gap="6px" Visibility="Collapsed" />
-  <Container Name="ComposerRow" Layout="Grid" Columns="44px 1fr 44px" Rows="44px" Width="100%" Gap="8px">
+  <Container Name="ComposerRow" Layout="Grid" Columns="44px 1fr 44px 44px" Rows="44px" Width="100%" Gap="8px">
     <Button Name="AddMenu" Variant="Icon" Column="0" Width="44px" Height="44px" MinHeight="44px" Radius="22px" />
     <Icon Name="AddMenuIcon" Key="plus" Column="0" Width="20px" Height="20px" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="TextPrimary" PointerEvents="None" ZIndex="1" />
     <Container Name="InstructionViewport" Column="1" Layout="Overlay" Height="44px" MaxHeight="124px" Overflow="Scroll" Clip="true" Radius="22px">
       <Input Name="Instruction" Multiline="true" SubmitOnEnter="true" Width="100%" MinHeight="44px" Height="44px" Background="Transparent" Padding="0px 12px" Radius="22px" Placeholder="Ask Haven anything" />
     </Container>
-    <Button Name="Send" Variant="Icon" Column="2" Width="44px" Height="44px" MinHeight="44px" Radius="22px" />
-    <Icon Name="SendIcon" Key="arrow-up" Column="2" Width="20px" Height="20px" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="TextPrimary" PointerEvents="None" ZIndex="1" />
+    <Button Name="ChatSettings" Variant="Icon" Column="2" Width="44px" Height="44px" MinHeight="44px" Radius="22px" />
+    <Icon Name="ChatSettingsIcon" Key="settings" Column="2" Width="18px" Height="18px" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="TextPrimary" PointerEvents="None" ZIndex="1" />
+    <Button Name="Send" Variant="Icon" Column="3" Width="44px" Height="44px" MinHeight="44px" Radius="22px" />
+    <Icon Name="SendIcon" Key="arrow-up" Column="3" Width="20px" Height="20px" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="TextPrimary" PointerEvents="None" ZIndex="1" />
   </Container>
 </Container>
