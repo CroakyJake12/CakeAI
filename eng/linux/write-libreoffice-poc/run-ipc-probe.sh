@@ -44,6 +44,8 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 engine_binary="${ENGINE_BINARY:-$script_dir/haven_write_engine_poc}"
 client_binary="${CLIENT_BINARY:-$script_dir/haven_write_engine_client}"
 helper_log="$work_dir/helper.log"
+client_log="$work_dir/client.log"
+diagnostic_dir="$(dirname "$output_document")"
 
 if [[ ! -f "$source_document" ]]; then
   echo "FAIL: source document does not exist: $source_document" >&2
@@ -67,10 +69,13 @@ if ! command -v timeout >/dev/null 2>&1; then
   exit 70
 fi
 
-mkdir -p "$work_dir"
+mkdir -p "$work_dir" "$diagnostic_dir"
 rm -rf "$profile_dir"
 mkdir -p "$profile_dir"
-rm -f "$socket_path" "$helper_log" "$output_document"
+rm -f "$socket_path" "$helper_log" "$client_log" "$output_document" \
+  "$diagnostic_dir/ipc-helper.log" \
+  "$diagnostic_dir/ipc-client.log" \
+  "$diagnostic_dir/ipc-failure.txt"
 
 helper_pid=''
 cleanup() {
@@ -81,6 +86,30 @@ cleanup() {
   rm -f "$socket_path"
 }
 trap cleanup EXIT INT TERM
+
+persist_failure_diagnostics() {
+  local reason="$1"
+  local client_status="${2:-n/a}"
+  local helper_status="${3:-n/a}"
+  local client_tail helper_tail summary
+
+  cp "$helper_log" "$diagnostic_dir/ipc-helper.log" 2>/dev/null || true
+  cp "$client_log" "$diagnostic_dir/ipc-client.log" 2>/dev/null || true
+
+  client_tail="$(tail -n 8 "$client_log" 2>/dev/null | tr '\n' ' ' || true)"
+  helper_tail="$(tail -n 12 "$helper_log" 2>/dev/null | tr '\n' ' ' || true)"
+  summary="reason=$reason; client_status=$client_status; helper_status=$helper_status; client_tail=$client_tail; helper_tail=$helper_tail"
+  printf '%s\n' "$summary" > "$diagnostic_dir/ipc-failure.txt"
+
+  # GitHub Actions interprets workflow commands emitted by nested processes too.
+  # Keep this deliberately compact so the check-run annotation can be queried
+  # separately even when the full apt/container log is too large for tooling.
+  summary="${summary:0:1800}"
+  summary="${summary//'%'/'%25'}"
+  summary="${summary//$'\r'/'%0D'}"
+  summary="${summary//$'\n'/'%0A'}"
+  printf '::error title=Writer helper IPC runtime failure::%s\n' "$summary"
+}
 
 SAL_USE_VCLPLUGIN=svp \
   timeout "$watchdog" \
@@ -93,12 +122,15 @@ SAL_USE_VCLPLUGIN=svp \
 helper_pid=$!
 
 set +e
-"$client_binary" "$socket_path" "$source_document" "$output_document"
+"$client_binary" "$socket_path" "$source_document" "$output_document" \
+  > >(tee "$client_log") \
+  2> >(tee -a "$client_log" >&2)
 client_status=$?
 set -e
 
 if [[ $client_status -ne 0 ]]; then
   cat "$helper_log" >&2 || true
+  persist_failure_diagnostics "validation-client-failed" "$client_status" "pending"
   echo "FAIL: helper IPC validation client exited with $client_status" >&2
   exit "$client_status"
 fi
@@ -111,14 +143,17 @@ helper_pid=''
 cat "$helper_log"
 
 if [[ $helper_status -ne 0 ]]; then
+  persist_failure_diagnostics "helper-process-failed" "$client_status" "$helper_status"
   echo "FAIL: helper exited with status $helper_status" >&2
   exit "$helper_status"
 fi
 if [[ -e "$socket_path" ]]; then
+  persist_failure_diagnostics "socket-not-removed" "$client_status" "$helper_status"
   echo "FAIL: helper did not remove its Unix socket during deterministic shutdown" >&2
   exit 71
 fi
 if [[ ! -s "$output_document" ]]; then
+  persist_failure_diagnostics "output-missing" "$client_status" "$helper_status"
   echo "FAIL: helper IPC proof did not produce a non-empty ODT" >&2
   exit 72
 fi
