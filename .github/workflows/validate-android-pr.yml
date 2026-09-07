@@ -1,0 +1,93 @@
+name: Validate CakeAI Android PR
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/validate-android-pr.yml"
+      - "global.json"
+      - "Directory.Build.props"
+      - "Directory.Packages.props"
+      - "src/Haven.Android/**"
+      - "src/Haven.Desktop/**"
+      - "src/Haven.UI/**"
+      - "src/Haven.Core/**"
+      - "src/Haven.Application/**"
+      - "src/Haven.Infrastructure/**"
+      - "src/Haven.Browser/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-cakeai-android-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Compile and package Android PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    env:
+      AVALONIA_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v6
+
+      - name: Install .NET from global.json
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Install Android workload
+        run: dotnet workload install android
+
+      - name: Restore Android head
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p artifacts/android-pr
+          dotnet restore src/Haven.Android/Haven.Android.csproj 2>&1 | tee artifacts/android-pr/restore.log
+
+      - name: Compile Android head
+        shell: bash
+        run: |
+          set -o pipefail
+          dotnet build src/Haven.Android/Haven.Android.csproj \
+            -c Debug \
+            -f net10.0-android \
+            --no-restore 2>&1 | tee artifacts/android-pr/build.log
+
+      - name: Package APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish src/Haven.Android/Haven.Android.csproj \
+            -c Debug \
+            -f net10.0-android \
+            --no-restore \
+            -p:AndroidPackageFormat=apk \
+            -p:AndroidKeyStore=false 2>&1 | tee artifacts/android-pr/publish.log
+
+          mapfile -t apks < <(find src/Haven.Android/bin/Debug/net10.0-android -type f -name '*.apk' | sort)
+          test "${#apks[@]}" -gt 0
+          for apk in "${apks[@]}"; do
+            cp "$apk" "artifacts/android-pr/$(basename "$apk")"
+          done
+          sha256sum artifacts/android-pr/*.apk | tee artifacts/android-pr/SHA256SUMS.txt
+
+      - name: Upload Android validation evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: CakeAI-Android-PR-${{ github.event.pull_request.number }}
+          path: |
+            artifacts/android-pr/*.log
+            artifacts/android-pr/*.apk
+            artifacts/android-pr/SHA256SUMS.txt
+          if-no-files-found: ignore
+          retention-days: 30
