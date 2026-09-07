@@ -5,12 +5,13 @@ namespace Haven.Infrastructure;
 
 public sealed class CapabilityRepository(ISqliteConnectionFactory factory) : ICapabilityRepository
 {
-    private int _seeded;
+    private readonly SemaphoreSlim _seedGate = new(1, 1);
+    private bool _seeded;
 
     public async Task<IReadOnlyList<CapabilityDefinition>> GetCapabilitiesAsync(CancellationToken cancellationToken)
     {
-        await SeedAsync(cancellationToken).ConfigureAwait(false);
         await using var connection = await factory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await SeedAsync(connection, cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = "SELECT * FROM capabilities WHERE is_enabled=1 ORDER BY owner_app_key,name;";
         var result = new List<CapabilityDefinition>();
@@ -50,25 +51,39 @@ public sealed class CapabilityRepository(ISqliteConnectionFactory factory) : ICa
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task SeedAsync(CancellationToken cancellationToken)
+    private async Task SeedAsync(Microsoft.Data.Sqlite.SqliteConnection connection, CancellationToken cancellationToken)
     {
-        if (Interlocked.Exchange(ref _seeded, 1) != 0) return;
+        if (Volatile.Read(ref _seeded)) return;
+
+        await _seedGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (Volatile.Read(ref _seeded)) return;
+
+            await using var transaction = (Microsoft.Data.Sqlite.SqliteTransaction)await connection
+                .BeginTransactionAsync(cancellationToken)
+                .ConfigureAwait(false);
+
             foreach (var capability in CapabilityRegistryCatalog.BuiltIns)
-                await UpsertBuiltInAsync(capability, cancellationToken).ConfigureAwait(false);
+                await UpsertBuiltInAsync(connection, transaction, capability, cancellationToken).ConfigureAwait(false);
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            Volatile.Write(ref _seeded, true);
         }
-        catch
+        finally
         {
-            Interlocked.Exchange(ref _seeded, 0);
-            throw;
+            _seedGate.Release();
         }
     }
 
-    private async Task UpsertBuiltInAsync(CapabilityDefinition capability, CancellationToken cancellationToken)
+    private static async Task UpsertBuiltInAsync(
+        Microsoft.Data.Sqlite.SqliteConnection connection,
+        Microsoft.Data.Sqlite.SqliteTransaction transaction,
+        CapabilityDefinition capability,
+        CancellationToken cancellationToken)
     {
-        await using var connection = await factory.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = UpsertSql.Replace(
             "is_built_in=excluded.is_built_in,is_enabled=excluded.is_enabled",
             "is_built_in=1,is_enabled=1",
