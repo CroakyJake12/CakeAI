@@ -390,7 +390,13 @@ public static class ActionGraphProjection
         ExportExecution? Execution,
         ExportMetrics Metrics,
         IReadOnlyList<ExportNode> Nodes,
-        IReadOnlyList<ExportLink> Links);
+        IReadOnlyList<ExportLink> Links)
+    {
+        public ActionGraphExportPayload()
+            : this(string.Empty, default, null, new ExportMetrics(0, 0, 0, 0, 0, null), [], [])
+        {
+        }
+    }
 
     private sealed record ExportExecution(
         Guid ExecutionId,
