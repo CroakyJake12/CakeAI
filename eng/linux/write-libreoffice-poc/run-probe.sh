@@ -5,6 +5,9 @@ usage() {
   cat <<'EOF'
 Usage: run-probe.sh <source-document> [output-document]
 
+If output-document is omitted, the probe writes a disposable round-trip ODT
+inside BUILD_DIR so edit persistence and reopen are still exercised.
+
 Environment overrides:
   LO_PROGRAM_PATH   LibreOffice program directory (default /usr/lib/libreoffice/program)
   CXX               C++ compiler (default c++)
@@ -23,10 +26,10 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 source_document="$1"
-output_document="${2:-}"
 lo_program="${LO_PROGRAM_PATH:-/usr/lib/libreoffice/program}"
 cxx="${CXX:-c++}"
 build_dir="${BUILD_DIR:-/tmp/haven-write-lok-probe}"
+output_document="${2:-$build_dir/roundtrip.odt}"
 profile_dir="$build_dir/profile"
 tile_file="$build_dir/tile.rgba"
 probe_binary="$build_dir/lok_probe"
@@ -57,6 +60,7 @@ fi
 mkdir -p "$build_dir"
 rm -rf "$profile_dir"
 mkdir -p "$profile_dir"
+rm -f "$tile_file" "$output_document"
 
 "$cxx" \
   -std=c++20 \
@@ -66,16 +70,13 @@ mkdir -p "$profile_dir"
   -ldl \
   -o "$probe_binary"
 
-args=("$lo_program" "$profile_dir" "$source_document")
-if [[ -n "$output_document" ]]; then
-  args+=("$output_document")
-else
-  args+=("")
-fi
-args+=("$tile_file")
-
 SAL_USE_VCLPLUGIN=svp \
-  "$probe_binary" "${args[@]}"
+  "$probe_binary" \
+  "$lo_program" \
+  "$profile_dir" \
+  "$source_document" \
+  "$output_document" \
+  "$tile_file"
 
 if [[ ! -s "$tile_file" ]]; then
   echo "FAIL: probe did not produce a non-empty tile buffer" >&2
@@ -89,4 +90,10 @@ if [[ "$actual_bytes" -ne "$expected_bytes" ]]; then
   exit 71
 fi
 
-printf 'PASS: tile buffer %s bytes; profile %s\n' "$actual_bytes" "$profile_dir"
+if [[ ! -s "$output_document" ]]; then
+  echo "FAIL: probe did not produce a non-empty round-trip document" >&2
+  exit 72
+fi
+
+printf 'PASS: tile buffer %s bytes; round-trip %s; profile %s\n' \
+  "$actual_bytes" "$output_document" "$profile_dir"
