@@ -53,6 +53,7 @@ public sealed partial class TopRail : UserControl, IDisposable
     public event EventHandler<TabRenameRequestedEventArgs>? TabRenameRequested;
     public event EventHandler<TabCommandRequestedEventArgs>? TabCommandRequested;
     public event EventHandler<HavenNavigationTarget>? NotificationOpenRequested;
+    public event EventHandler? NotificationSettingsRequested;
 
     /// <summary>Attaches the one application event bus used by the entire shell.</summary>
     public void AttachEventBus(HavenEventBus eventBus)
@@ -412,6 +413,11 @@ public sealed partial class TopRail : UserControl, IDisposable
     {
         var centre = new NotificationCentre { Height = 520 };
         centre.CloseRequested += (_, _) => _notificationFlyout?.Hide();
+        centre.SettingsClicked += (_, _) =>
+        {
+            _notificationFlyout?.Hide();
+            NotificationSettingsRequested?.Invoke(this, EventArgs.Empty);
+        };
         centre.DismissRequested += (_, id) => _notificationService?.Dismiss(id);
         centre.OpenRequested += (_, target) =>
         {

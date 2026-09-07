@@ -63,7 +63,7 @@ internal sealed class AppLauncherFinalScene
 
         _sections = new Container { Name = "HeaderDropdown.Apps.Sections", Layout = HavenLayout.Vertical };
         _sections.SetValue(HavenProperties.Width, HavenLength.Percent(100));
-        _sections.SetValue(HavenProperties.Height, HavenLength.Fr(1));
+        _sections.SetValue(HavenProperties.Height, HavenLength.Px(382));
         _sections.SetValue(HavenProperties.Overflow, HavenOverflow.Scroll);
         _sections.SetValue(HavenProperties.Clip, true);
         _sections.SetValue(HavenProperties.Gap, HavenLength.Px(16));

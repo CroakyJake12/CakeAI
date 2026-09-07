@@ -110,6 +110,7 @@ public sealed class NotificationCentre : Grid, IDisposable
                 _searchBox,
                 new ScrollViewer
                 {
+                    MaxHeight = 320,
                     VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
                     HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
                     Content = new StackPanel
@@ -118,7 +119,7 @@ public sealed class NotificationCentre : Grid, IDisposable
                         Children = { _prioritySection, _unreadSection, _emptyState }
                     }
                 },
-                new HavenAdaptiveSurface { Height = 1, Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)) },
+                new HavenAdaptiveSurface { Height = 1, Background = ResourceBrush("HavenLineBrush", Color.FromArgb(30, 0, 0, 0)) },
                 _settingsButton
             }
         };
@@ -338,7 +339,12 @@ public sealed class NotificationCentre : Grid, IDisposable
 
     private void UpdateEmptyState()
     {
-        _emptyState.IsVisible = _priorityItems.Children.Count == 0 && _unreadItems.Children.Count == 0;
+        var priorityVisible = _priorityItems.Children.Any(child => child.IsVisible);
+        var unreadVisible = _unreadItems.Children.Any(child => child.IsVisible);
+        _prioritySection.IsVisible = priorityVisible;
+        _unreadSection.IsVisible = unreadVisible;
+        _emptyState.Text = string.IsNullOrWhiteSpace(_searchBox.Text) ? "No notifications" : "No notifications match this search";
+        _emptyState.IsVisible = !priorityVisible && !unreadVisible;
     }
 
     private void OnSearchChanged(object? sender, TextChangedEventArgs e)
@@ -346,6 +352,7 @@ public sealed class NotificationCentre : Grid, IDisposable
         var query = _searchBox.Text?.Trim() ?? string.Empty;
         FilterSection(_priorityItems, query);
         FilterSection(_unreadItems, query);
+        UpdateEmptyState();
     }
 
     private static void FilterSection(StackPanel items, string query)

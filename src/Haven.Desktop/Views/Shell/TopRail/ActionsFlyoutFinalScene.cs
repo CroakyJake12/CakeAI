@@ -70,7 +70,7 @@ internal sealed class ActionsFlyoutFinalScene
         _sections = new Container { Name = "HeaderDropdown.Actions.Sections", Layout = HavenLayout.Vertical };
         _sections.SetValue(HavenProperties.Row, 2);
         _sections.SetValue(HavenProperties.Width, HavenLength.Percent(100));
-        _sections.SetValue(HavenProperties.Height, HavenLength.Fr(1));
+        _sections.SetValue(HavenProperties.Height, HavenLength.Px(412));
         _sections.SetValue(HavenProperties.Overflow, HavenOverflow.Scroll);
         _sections.SetValue(HavenProperties.Clip, true);
         _sections.SetValue(HavenProperties.Gap, HavenLength.Px(16));

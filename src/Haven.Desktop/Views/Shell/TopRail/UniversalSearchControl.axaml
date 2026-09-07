@@ -3,7 +3,7 @@
              xmlns:hui="using:Haven.Desktop.HavenUI.Components"
              xmlns:controls="using:Haven.Desktop.Controls"
              x:Class="Haven.Desktop.Views.Shell.TopRail.UniversalSearchControl">
-  <StackPanel Spacing="9">
+  <StackPanel Spacing="12">
     <hui:HavenAdaptiveSurface Background="{DynamicResource HavenElevatedBrush}"
             BorderBrush="{DynamicResource HavenLineBrush}"
             BorderThickness="1"
@@ -32,7 +32,7 @@
             BorderThickness="1"
             CornerRadius="24"
             Padding="15">
-      <ScrollViewer MaxHeight="560"
+      <ScrollViewer MaxHeight="500"
                     HorizontalScrollBarVisibility="Disabled"
                     VerticalScrollBarVisibility="Auto">
         <StackPanel x:Name="ResultsPanel" Spacing="5"/>
