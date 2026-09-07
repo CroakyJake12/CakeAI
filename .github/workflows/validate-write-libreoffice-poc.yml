@@ -77,26 +77,30 @@ jobs:
           --filter 'FullyQualifiedName~LibreOfficeWriteEngineOptionsTests'
           --logger 'console;verbosity=normal'
 
-      - name: Build standalone native probe artifact
+      - name: Build standalone native probe artifacts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts/write-libreoffice-poc
-          c++ \
-            -std=c++20 \
-            -Wall -Wextra -Wpedantic -Werror \
-            -I/usr/include \
-            eng/linux/write-libreoffice-poc/lok_probe.cxx \
-            -ldl \
-            -o artifacts/write-libreoffice-poc/lok_probe
-          chmod 0755 artifacts/write-libreoffice-poc/lok_probe
-          ldd artifacts/write-libreoffice-poc/lok_probe
+          for probe in lok_probe lok_semantic_probe; do
+            c++ \
+              -std=c++20 \
+              -Wall -Wextra -Wpedantic -Werror \
+              -I/usr/include \
+              "eng/linux/write-libreoffice-poc/${probe}.cxx" \
+              -ldl \
+              -o "artifacts/write-libreoffice-poc/${probe}"
+            chmod 0755 "artifacts/write-libreoffice-poc/${probe}"
+            ldd "artifacts/write-libreoffice-poc/${probe}"
+          done
+          cp eng/linux/write-libreoffice-poc/verify-semantic-odt.py \
+            artifacts/write-libreoffice-poc/verify-semantic-odt.py
 
-      - name: Upload standalone native probe
+      - name: Upload standalone native probes
         uses: actions/upload-artifact@v7
         with:
           name: Haven-Write-LOK-Probe-${{ github.run_id }}
-          path: artifacts/write-libreoffice-poc/lok_probe
+          path: artifacts/write-libreoffice-poc
           if-no-files-found: error
           retention-days: 7
 
@@ -166,6 +170,22 @@ jobs:
           print('PASS: persisted Writer edit marker found in ODT content.xml')
           PY
 
+      - name: Execute callback-driven semantic command probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash eng/linux/write-libreoffice-poc/run-semantic-probe.sh \
+            /tmp/haven-write-fixture.odt \
+            /tmp/haven-write-semantic-roundtrip.odt
+          test -s /tmp/haven-write-semantic-roundtrip.odt
+
+      - name: Verify semantic Bold persistence independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 eng/linux/write-libreoffice-poc/verify-semantic-odt.py \
+            /tmp/haven-write-semantic-roundtrip.odt
+
       - name: Record probe evidence summary
         if: always()
         shell: bash
@@ -185,6 +205,11 @@ jobs:
             else
               echo '- Rendered tile: not proven.'
             fi
+            if [[ -s /tmp/haven-write-semantic-roundtrip.odt ]]; then
+              echo '- Callback-driven SelectAll/Bold semantic output: produced and independently verified.'
+            else
+              echo '- Callback-driven semantic output: not proven.'
+            fi
             echo '- Approved VM/package-image/runtime proof remains a separate gate.'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -195,7 +220,7 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Download standalone native probe
+      - name: Download standalone native probes
         uses: actions/download-artifact@v8
         with:
           name: Haven-Write-LOK-Probe-${{ github.run_id }}
@@ -205,7 +230,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chmod 0755 artifacts/write-libreoffice-poc/lok_probe
+          chmod 0755 \
+            artifacts/write-libreoffice-poc/lok_probe \
+            artifacts/write-libreoffice-poc/lok_semantic_probe
           mkdir -p "$RUNNER_TEMP/haven-write-runtime-only"
           python3 - <<'PY'
           import os
@@ -240,7 +267,7 @@ jobs:
               archive.writestr('META-INF/manifest.xml', manifest, compress_type=ZIP_DEFLATED)
           PY
 
-      - name: Run prebuilt probe in minimal Ubuntu runtime container
+      - name: Run prebuilt probes in minimal Ubuntu runtime container
         shell: bash
         run: |
           set -euo pipefail
@@ -273,11 +300,13 @@ jobs:
               fi
 
               test -f /usr/lib/libreoffice/program/libmergedlo.so -o -f /usr/lib/libreoffice/program/libsofficeapp.so
-              ldd /probe/lok_probe | tee /io/probe-ldd.txt
-              if ldd /probe/lok_probe | grep -Eiq "gtk|lokdocview|libreofficekitgtk"; then
-                echo "FAIL: prebuilt probe has a direct GTK/LOKDocView dependency" >&2
-                exit 1
-              fi
+              for probe in lok_probe lok_semantic_probe; do
+                ldd "/probe/$probe" | tee "/io/${probe}-ldd.txt"
+                if ldd "/probe/$probe" | grep -Eiq "gtk|lokdocview|libreofficekitgtk"; then
+                  echo "FAIL: prebuilt $probe has a direct GTK/LOKDocView dependency" >&2
+                  exit 1
+                fi
+              done
 
               mkdir -p /tmp/haven-write-profile
               SAL_USE_VCLPLUGIN=svp /probe/lok_probe \
@@ -289,12 +318,22 @@ jobs:
 
               test -s /io/roundtrip.odt
               test "$(stat -c %s /io/tile.rgba)" -eq $((512 * 512 * 4))
+
+              command -v timeout >/dev/null 2>&1
+              mkdir -p /tmp/haven-write-semantic-profile
+              SAL_USE_VCLPLUGIN=svp timeout 30s /probe/lok_semantic_probe \
+                /usr/lib/libreoffice/program \
+                /tmp/haven-write-semantic-profile \
+                /io/source.odt \
+                /io/semantic-roundtrip.odt
+              test -s /io/semantic-roundtrip.odt
+
               dpkg-query -W -f="\${Package}\t\${Version}\n" \
                 libreoffice-core-nogui \
                 libreoffice-writer-nogui > /io/runtime-package-versions.txt
             '
 
-      - name: Verify runtime-only persisted edit outside container
+      - name: Verify runtime-only persisted edits outside container
         shell: bash
         run: |
           set -euo pipefail
@@ -314,6 +353,9 @@ jobs:
           print('PASS: runtime-only Writer edit/save/reopen/tile proof succeeded')
           PY
 
+          python3 artifacts/write-libreoffice-poc/verify-semantic-odt.py \
+            "$RUNNER_TEMP/haven-write-runtime-only/semantic-roundtrip.odt"
+
       - name: Record runtime-only evidence summary
         if: always()
         shell: bash
@@ -322,7 +364,7 @@ jobs:
             echo '### Headless runtime-only package proof'
             echo
             echo '- Environment: disposable minimal `ubuntu:24.04` container on GitHub-hosted CI.'
-            echo '- Probe: prebuilt in the preceding job; no compiler or LibreOfficeKit headers installed here.'
+            echo '- Probes: prebuilt in the preceding job; no compiler or LibreOfficeKit headers installed here.'
             if [[ -s "$RUNNER_TEMP/haven-write-runtime-only/runtime-package-versions.txt" ]]; then
               echo '- Runtime packages:'
               echo '```text'
@@ -333,6 +375,11 @@ jobs:
               echo '- Writer edit/save/reopen output: produced.'
             else
               echo '- Writer edit/save/reopen output: not proven.'
+            fi
+            if [[ -s "$RUNNER_TEMP/haven-write-runtime-only/semantic-roundtrip.odt" ]]; then
+              echo '- Callback-driven SelectAll/Bold semantic output: produced and independently verified.'
+            else
+              echo '- Callback-driven semantic output: not proven.'
             fi
             echo '- This remains portable Linux evidence, not approved CakeOS VM/image proof.'
           } >> "$GITHUB_STEP_SUMMARY"
