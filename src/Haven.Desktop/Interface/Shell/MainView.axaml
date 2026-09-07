@@ -9,10 +9,10 @@
 
   <!-- The active New Haven shell is intentionally edge-to-edge. Pages share
        the window tide; there is no inherited light workspace card around them. -->
-  <Grid RowDefinitions="Auto,*" Background="Transparent" ClipToBounds="True">
-    <topRail:TopRail x:Name="TopRail" Grid.Row="0" />
+  <Grid RowDefinitions="*,Auto" Background="Transparent" ClipToBounds="True">
+    <topRail:TopRail x:Name="TopRail" Grid.Row="1" />
 
-    <Grid Grid.Row="1"
+    <Grid Grid.Row="0"
           ColumnDefinitions="Auto,*"
           ColumnSpacing="18"
           Margin="24,0,24,20"
@@ -55,7 +55,7 @@
           </Grid>
 
           <!-- Retained as a hidden compatibility host for the existing event
-               wiring. New Haven's page identity lives in the top tab rail. -->
+               wiring. New Haven's page identity lives in the taskbar tab shelf. -->
           <Grid x:Name="ShellContextBar"
                 IsVisible="False"
                 IsHitTestVisible="False">
