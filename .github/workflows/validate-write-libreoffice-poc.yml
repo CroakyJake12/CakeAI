@@ -1,0 +1,437 @@
+name: Validate Haven Write LibreOffice PoC
+
+on:
+  pull_request:
+    paths:
+      - 'src/Haven.Application/Write/**'
+      - 'src/Haven.Infrastructure/Write/LibreOffice/**'
+      - 'tests/Haven.Infrastructure.Tests/LibreOfficeWriteEngineOptionsTests.cs'
+      - 'eng/linux/write-libreoffice-poc/**'
+      - 'docs/architecture/write-libreoffice-engine.md'
+      - 'docs/architecture/system-map.md'
+      - '.github/workflows/validate-write-libreoffice-poc.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-write-libreoffice:
+    name: Build, test and run LibreOfficeKit Writer probe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v6
+
+      - name: Install .NET from global.json
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Install headless Writer runtime and LibreOfficeKit build headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++ \
+            libreoffice-core-nogui \
+            libreoffice-writer-nogui \
+            libreofficekit-dev
+
+      - name: Record LibreOffice package and ABI evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '### LibreOffice build-host package evidence' >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          dpkg-query -W -f='${Package}\t${Version}\n' \
+            libreoffice-core-nogui \
+            libreoffice-writer-nogui \
+            libreofficekit-dev | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          test -f /usr/include/LibreOfficeKit/LibreOfficeKit.h
+          if [[ -f /usr/lib/libreoffice/program/libsofficeapp.so ]]; then
+            ls -l /usr/lib/libreoffice/program/libsofficeapp.so
+          elif [[ -f /usr/lib/libreoffice/program/libmergedlo.so ]]; then
+            ls -l /usr/lib/libreoffice/program/libmergedlo.so
+          else
+            echo 'FAIL: no LibreOfficeKit runtime library found in /usr/lib/libreoffice/program' >&2
+            exit 1
+          fi
+
+      - name: Restore focused .NET test project
+        run: dotnet restore tests/Haven.Infrastructure.Tests/Haven.Infrastructure.Tests.csproj
+
+      - name: Build focused .NET test project
+        run: dotnet build tests/Haven.Infrastructure.Tests/Haven.Infrastructure.Tests.csproj -c Release --no-restore
+
+      - name: Run LibreOffice engine configuration tests
+        run: >-
+          dotnet test tests/Haven.Infrastructure.Tests/Haven.Infrastructure.Tests.csproj
+          -c Release
+          --no-build
+          --filter 'FullyQualifiedName~LibreOfficeWriteEngineOptionsTests'
+          --logger 'console;verbosity=normal'
+
+      - name: Build standalone native probe artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/write-libreoffice-poc
+          for probe in lok_probe lok_semantic_probe haven_write_engine_poc haven_write_engine_client; do
+            c++ \
+              -std=c++20 \
+              -Wall -Wextra -Wpedantic -Werror \
+              -I/usr/include \
+              "eng/linux/write-libreoffice-poc/${probe}.cxx" \
+              -ldl \
+              -o "artifacts/write-libreoffice-poc/${probe}"
+            chmod 0755 "artifacts/write-libreoffice-poc/${probe}"
+            ldd "artifacts/write-libreoffice-poc/${probe}"
+          done
+          cp eng/linux/write-libreoffice-poc/verify-semantic-odt.py \
+            artifacts/write-libreoffice-poc/verify-semantic-odt.py
+          cp eng/linux/write-libreoffice-poc/run-ipc-probe.sh \
+            artifacts/write-libreoffice-poc/run-ipc-probe.sh
+          chmod 0755 artifacts/write-libreoffice-poc/run-ipc-probe.sh
+
+      - name: Upload standalone native probes
+        uses: actions/upload-artifact@v7
+        with:
+          name: Haven-Write-LOK-Probe-${{ github.run_id }}
+          path: artifacts/write-libreoffice-poc
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Create minimal ODT fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
+
+          destination = Path('/tmp/haven-write-fixture.odt')
+          content = '''<?xml version="1.0" encoding="UTF-8"?>
+          <office:document-content
+              xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+              xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+              office:version="1.3">
+            <office:body>
+              <office:text>
+                <text:p>Haven Write LibreOfficeKit CI fixture</text:p>
+              </office:text>
+            </office:body>
+          </office:document-content>
+          '''
+          manifest = '''<?xml version="1.0" encoding="UTF-8"?>
+          <manifest:manifest
+              xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"
+              manifest:version="1.3">
+            <manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/>
+            <manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>
+          </manifest:manifest>
+          '''
+
+          with ZipFile(destination, 'w') as archive:
+              archive.writestr('mimetype', 'application/vnd.oasis.opendocument.text', compress_type=ZIP_STORED)
+              archive.writestr('content.xml', content, compress_type=ZIP_DEFLATED)
+              archive.writestr('META-INF/manifest.xml', manifest, compress_type=ZIP_DEFLATED)
+
+          if destination.stat().st_size <= 0:
+              raise SystemExit('ODT fixture creation failed')
+          print(destination, destination.stat().st_size)
+          PY
+
+      - name: Build and execute native Writer round-trip probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash eng/linux/write-libreoffice-poc/run-probe.sh \
+            /tmp/haven-write-fixture.odt \
+            /tmp/haven-write-roundtrip.odt
+          test -s /tmp/haven-write-roundtrip.odt
+
+      - name: Verify persisted Writer edit in ODT payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          marker = 'HAVEN_WRITE_LOK_EDIT_PROOF_20260907'
+          output = Path('/tmp/haven-write-roundtrip.odt')
+          with ZipFile(output) as archive:
+              content = archive.read('content.xml').decode('utf-8')
+          if marker not in content:
+              raise SystemExit('FAIL: LibreOfficeKit edit marker was not persisted to ODT content.xml')
+          print('PASS: persisted Writer edit marker found in ODT content.xml')
+          PY
+
+      - name: Execute callback-driven semantic command probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash eng/linux/write-libreoffice-poc/run-semantic-probe.sh \
+            /tmp/haven-write-fixture.odt \
+            /tmp/haven-write-semantic-roundtrip.odt
+          test -s /tmp/haven-write-semantic-roundtrip.odt
+
+      - name: Verify semantic Bold persistence independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 eng/linux/write-libreoffice-poc/verify-semantic-odt.py \
+            /tmp/haven-write-semantic-roundtrip.odt
+
+      - name: Execute isolated helper IPC proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          io_root=/tmp/haven-write-ipc-io
+          rm -rf "$io_root" /tmp/haven-write-engine-ipc-poc
+          mkdir -p "$io_root"
+          cp /tmp/haven-write-fixture.odt "$io_root/source.odt"
+          ENGINE_BINARY="$PWD/artifacts/write-libreoffice-poc/haven_write_engine_poc" \
+          CLIENT_BINARY="$PWD/artifacts/write-libreoffice-poc/haven_write_engine_client" \
+          IPC_WORK_DIR=/tmp/haven-write-engine-ipc-poc \
+            bash eng/linux/write-libreoffice-poc/run-ipc-probe.sh \
+              "$io_root/source.odt" \
+              "$io_root/roundtrip.odt" \
+              "$io_root"
+
+      - name: Verify helper IPC Bold persistence independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 eng/linux/write-libreoffice-poc/verify-semantic-odt.py \
+            /tmp/haven-write-ipc-io/roundtrip.odt \
+            HAVEN_WRITE_LOK_IPC_PROOF_20260907
+
+      - name: Record probe evidence summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### Haven Write LibreOffice PoC'
+            echo
+            echo '- Build/runtime runner: GitHub-hosted Ubuntu 24.04 — **not** the approved CakeOS VM.'
+            if [[ -s /tmp/haven-write-roundtrip.odt ]]; then
+              echo '- Native output document: produced and non-empty.'
+            else
+              echo '- Native output document: not proven.'
+            fi
+            if [[ -s /tmp/haven-write-lok-probe/tile.rgba ]]; then
+              bytes="$(stat -c '%s' /tmp/haven-write-lok-probe/tile.rgba)"
+              echo "- Rendered tile bytes: ${bytes}."
+            else
+              echo '- Rendered tile: not proven.'
+            fi
+            if [[ -s /tmp/haven-write-semantic-roundtrip.odt ]]; then
+              echo '- Callback-driven SelectAll/Bold semantic output: produced and independently verified.'
+            else
+              echo '- Callback-driven semantic output: not proven.'
+            fi
+            if [[ -s /tmp/haven-write-ipc-io/roundtrip.odt ]]; then
+              echo '- Isolated helper Unix-socket IPC output: produced and independently verified.'
+            else
+              echo '- Isolated helper IPC output: not proven.'
+            fi
+            echo '- Approved VM/package-image/runtime proof remains a separate gate.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  validate-runtime-only:
+    name: Prove Writer runtime without LibreOfficeKit/GTK development packages
+    needs: validate-write-libreoffice
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Download standalone native probes
+        uses: actions/download-artifact@v8
+        with:
+          name: Haven-Write-LOK-Probe-${{ github.run_id }}
+          path: artifacts/write-libreoffice-poc
+
+      - name: Prepare disposable ODT fixture and runtime directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod 0755 \
+            artifacts/write-libreoffice-poc/lok_probe \
+            artifacts/write-libreoffice-poc/lok_semantic_probe \
+            artifacts/write-libreoffice-poc/haven_write_engine_poc \
+            artifacts/write-libreoffice-poc/haven_write_engine_client \
+            artifacts/write-libreoffice-poc/run-ipc-probe.sh
+          mkdir -p "$RUNNER_TEMP/haven-write-runtime-only"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
+
+          destination = Path(os.environ['RUNNER_TEMP']) / 'haven-write-runtime-only' / 'source.odt'
+          content = '''<?xml version="1.0" encoding="UTF-8"?>
+          <office:document-content
+              xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+              xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+              office:version="1.3">
+            <office:body>
+              <office:text>
+                <text:p>Haven Write runtime-only fixture</text:p>
+              </office:text>
+            </office:body>
+          </office:document-content>
+          '''
+          manifest = '''<?xml version="1.0" encoding="UTF-8"?>
+          <manifest:manifest
+              xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"
+              manifest:version="1.3">
+            <manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.text"/>
+            <manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>
+          </manifest:manifest>
+          '''
+
+          with ZipFile(destination, 'w') as archive:
+              archive.writestr('mimetype', 'application/vnd.oasis.opendocument.text', compress_type=ZIP_STORED)
+              archive.writestr('content.xml', content, compress_type=ZIP_DEFLATED)
+              archive.writestr('META-INF/manifest.xml', manifest, compress_type=ZIP_DEFLATED)
+          PY
+
+      - name: Run prebuilt probes in minimal Ubuntu runtime container
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_dir="$PWD/artifacts/write-libreoffice-poc"
+          io_dir="$RUNNER_TEMP/haven-write-runtime-only"
+
+          docker run --rm \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -v "$probe_dir:/probe:ro" \
+            -v "$io_dir:/io" \
+            ubuntu:24.04 \
+            bash -lc '
+              set -euo pipefail
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                libreoffice-core-nogui \
+                libreoffice-writer-nogui
+
+              for forbidden in libreofficekit-dev liblibreofficekitgtk gir1.2-lokdocview-0.1 libreoffice-gtk3; do
+                if dpkg-query -W -f="\${Status}" "$forbidden" 2>/dev/null | grep -q "install ok installed"; then
+                  echo "FAIL: forbidden build/UI package is installed in runtime-only container: $forbidden" >&2
+                  exit 1
+                fi
+              done
+
+              if dpkg-query -W -f="\${binary:Package}\n" | grep -Eq "^libgtk-[0-9]"; then
+                echo "FAIL: GTK runtime package unexpectedly entered the headless runtime closure" >&2
+                dpkg-query -W -f="\${binary:Package}\t\${Version}\n" | grep -E "^libgtk-" >&2 || true
+                exit 1
+              fi
+
+              test -f /usr/lib/libreoffice/program/libmergedlo.so -o -f /usr/lib/libreoffice/program/libsofficeapp.so
+              for probe in lok_probe lok_semantic_probe haven_write_engine_poc haven_write_engine_client; do
+                ldd "/probe/$probe" | tee "/io/${probe}-ldd.txt"
+                if ldd "/probe/$probe" | grep -Eiq "gtk|lokdocview|libreofficekitgtk"; then
+                  echo "FAIL: prebuilt $probe has a direct GTK/LOKDocView dependency" >&2
+                  exit 1
+                fi
+              done
+
+              mkdir -p /tmp/haven-write-profile
+              SAL_USE_VCLPLUGIN=svp /probe/lok_probe \
+                /usr/lib/libreoffice/program \
+                /tmp/haven-write-profile \
+                /io/source.odt \
+                /io/roundtrip.odt \
+                /io/tile.rgba
+
+              test -s /io/roundtrip.odt
+              test "$(stat -c %s /io/tile.rgba)" -eq $((512 * 512 * 4))
+
+              command -v timeout >/dev/null 2>&1
+              mkdir -p /tmp/haven-write-semantic-profile
+              SAL_USE_VCLPLUGIN=svp timeout 30s /probe/lok_semantic_probe \
+                /usr/lib/libreoffice/program \
+                /tmp/haven-write-semantic-profile \
+                /io/source.odt \
+                /io/semantic-roundtrip.odt
+              test -s /io/semantic-roundtrip.odt
+
+              ENGINE_BINARY=/probe/haven_write_engine_poc \
+              CLIENT_BINARY=/probe/haven_write_engine_client \
+              IPC_WORK_DIR=/tmp/haven-write-engine-ipc-poc \
+                bash /probe/run-ipc-probe.sh \
+                  /io/source.odt \
+                  /io/ipc-roundtrip.odt \
+                  /io
+              test -s /io/ipc-roundtrip.odt
+
+              dpkg-query -W -f="\${Package}\t\${Version}\n" \
+                libreoffice-core-nogui \
+                libreoffice-writer-nogui > /io/runtime-package-versions.txt
+            '
+
+      - name: Verify runtime-only persisted edits outside container
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          root = Path(os.environ['RUNNER_TEMP']) / 'haven-write-runtime-only'
+          marker = 'HAVEN_WRITE_LOK_EDIT_PROOF_20260907'
+          with ZipFile(root / 'roundtrip.odt') as archive:
+              content = archive.read('content.xml').decode('utf-8')
+          if marker not in content:
+              raise SystemExit('FAIL: runtime-only round trip did not persist the Writer edit marker')
+          if (root / 'tile.rgba').stat().st_size != 512 * 512 * 4:
+              raise SystemExit('FAIL: runtime-only tile size mismatch')
+          print('PASS: runtime-only Writer edit/save/reopen/tile proof succeeded')
+          PY
+
+          python3 artifacts/write-libreoffice-poc/verify-semantic-odt.py \
+            "$RUNNER_TEMP/haven-write-runtime-only/semantic-roundtrip.odt"
+          python3 artifacts/write-libreoffice-poc/verify-semantic-odt.py \
+            "$RUNNER_TEMP/haven-write-runtime-only/ipc-roundtrip.odt" \
+            HAVEN_WRITE_LOK_IPC_PROOF_20260907
+
+      - name: Record runtime-only evidence summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### Headless runtime-only package proof'
+            echo
+            echo '- Environment: disposable minimal `ubuntu:24.04` container on GitHub-hosted CI.'
+            echo '- Probes/helper/client: prebuilt in the preceding job; no compiler or LibreOfficeKit headers installed here.'
+            if [[ -s "$RUNNER_TEMP/haven-write-runtime-only/runtime-package-versions.txt" ]]; then
+              echo '- Runtime packages:'
+              echo '```text'
+              cat "$RUNNER_TEMP/haven-write-runtime-only/runtime-package-versions.txt"
+              echo '```'
+            fi
+            if [[ -s "$RUNNER_TEMP/haven-write-runtime-only/roundtrip.odt" ]]; then
+              echo '- Writer edit/save/reopen output: produced.'
+            else
+              echo '- Writer edit/save/reopen output: not proven.'
+            fi
+            if [[ -s "$RUNNER_TEMP/haven-write-runtime-only/semantic-roundtrip.odt" ]]; then
+              echo '- Callback-driven SelectAll/Bold semantic output: produced and independently verified.'
+            else
+              echo '- Callback-driven semantic output: not proven.'
+            fi
+            if [[ -s "$RUNNER_TEMP/haven-write-runtime-only/ipc-roundtrip.odt" ]]; then
+              echo '- Prebuilt helper Unix-socket IPC output: produced and independently verified.'
+            else
+              echo '- Prebuilt helper IPC output: not proven.'
+            fi
+            echo '- This remains portable Linux evidence, not approved CakeOS VM/image proof.'
+          } >> "$GITHUB_STEP_SUMMARY"
