@@ -135,7 +135,14 @@ public:
 
     ~EngineService()
     {
-        closeDocument();
+        // LibreOfficeKit objects are deliberately process-scoped in this
+        // disposable unipoll helper. Destroying document/kit objects while or
+        // immediately after the external runLoop unwinds produced a repeatable
+        // post-Shutdown SIGSEGV with LibreOffice 24.2.7. Socket resources are
+        // still closed and unlinked explicitly; the process boundary reclaims
+        // LibreOffice state on exit.
+        m_document = nullptr;
+        m_pending.reset();
         closeClient();
         if (m_listenFd >= 0)
             ::close(m_listenFd);
@@ -496,7 +503,7 @@ private:
     {
         if (m_document)
         {
-            sendResponse(static_cast<std::uint16_t>(Opcode::Open), requestId, Status::InvalidState, "a document is already open");
+            sendResponse(static_cast<std::uint16_t>(Opcode::Open), requestId, Status::InvalidState, "a document is already open for this helper lifetime");
             return;
         }
         const auto path = confinedExistingPath(payload);
@@ -514,7 +521,10 @@ private:
             || !m_document->pClass->getDocumentType
             || m_document->pClass->getDocumentType(m_document) != LOK_DOCTYPE_TEXT)
         {
-            closeDocument();
+            // Do not call LibreOfficeKit document destroy from inside unipoll.
+            // This helper is one-document/process for the PoC; process exit is
+            // the engine reclamation boundary.
+            m_document = nullptr;
             sendResponse(static_cast<std::uint16_t>(Opcode::Open), requestId, Status::EngineFailure, "Writer document load failed");
             return;
         }
@@ -528,7 +538,7 @@ private:
             || !m_document->pClass->paste
             || !m_document->pClass->saveAs)
         {
-            closeDocument();
+            m_document = nullptr;
             sendResponse(static_cast<std::uint16_t>(Opcode::Open), requestId, Status::EngineFailure, "required Writer APIs are unavailable");
             return;
         }
@@ -539,12 +549,13 @@ private:
             m_document->pClass->initializeForRendering(m_document, "{\"Author\":\"Haven Write IPC PoC\"}");
         }
         m_document->pClass->registerCallback(m_document, documentCallback, this);
+        m_logicallyClosed = false;
         sendResponse(static_cast<std::uint16_t>(Opcode::Open), requestId, Status::Ok, "writer-open");
     }
 
     void handleInsertText(std::uint64_t requestId, const std::string& payload)
     {
-        if (!m_document)
+        if (!m_document || m_logicallyClosed)
         {
             sendResponse(static_cast<std::uint16_t>(Opcode::InsertText), requestId, Status::InvalidState, "no document is open");
             return;
@@ -573,7 +584,7 @@ private:
             sendResponse(static_cast<std::uint16_t>(opcode), requestId, Status::InvalidPayload, "semantic command payload must be empty");
             return;
         }
-        if (!m_document)
+        if (!m_document || m_logicallyClosed)
         {
             sendResponse(static_cast<std::uint16_t>(opcode), requestId, Status::InvalidState, "no document is open");
             return;
@@ -631,7 +642,7 @@ private:
 
     void handleSave(std::uint64_t requestId, const std::string& payload)
     {
-        if (!m_document)
+        if (!m_document || m_logicallyClosed)
         {
             sendResponse(static_cast<std::uint16_t>(Opcode::Save), requestId, Status::InvalidState, "no document is open");
             return;
@@ -658,12 +669,18 @@ private:
             sendResponse(static_cast<std::uint16_t>(Opcode::Close), requestId, Status::InvalidPayload, "payload must be empty");
             return;
         }
-        if (!m_document)
+        if (!m_document || m_logicallyClosed)
         {
             sendResponse(static_cast<std::uint16_t>(Opcode::Close), requestId, Status::InvalidState, "no document is open");
             return;
         }
-        closeDocument();
+
+        // Closing is logical inside the running unipoll loop. The helper is
+        // intentionally one-document/process in this PoC, so LibreOfficeKit
+        // object reclamation is deferred to process exit rather than invoking
+        // destroy from a client poll callback.
+        m_logicallyClosed = true;
+        m_pending.reset();
         sendResponse(static_cast<std::uint16_t>(Opcode::Close), requestId, Status::Ok, "closed");
     }
 
@@ -674,17 +691,10 @@ private:
             sendResponse(static_cast<std::uint16_t>(Opcode::Shutdown), requestId, Status::InvalidPayload, "payload must be empty");
             return;
         }
-        closeDocument();
+        m_logicallyClosed = true;
+        m_pending.reset();
         sendResponse(static_cast<std::uint16_t>(Opcode::Shutdown), requestId, Status::Ok, "shutdown");
         m_shutdown = true;
-    }
-
-    void closeDocument()
-    {
-        if (m_document && m_document->pClass && m_document->pClass->destroy)
-            m_document->pClass->destroy(m_document);
-        m_document = nullptr;
-        m_pending.reset();
     }
 
     void sendResponse(std::uint16_t requestOpcode, std::uint64_t requestId, Status status, std::string_view payload)
@@ -720,6 +730,7 @@ private:
     int m_listenFd = -1;
     int m_clientFd = -1;
     bool m_shutdown = false;
+    bool m_logicallyClosed = false;
     std::optional<PendingCommand> m_pending;
 };
 
@@ -779,11 +790,10 @@ int main(int argc, char** argv)
 
         kit->pClass->runLoop(kit, clientPoll, clientWake, &service);
 
-        // LibreOffice 24.2.7's unipoll loop has already unwound its process-scoped
-        // engine state here. Explicitly destroying the top-level kit after that loop
-        // produced an observed post-Shutdown SIGSEGV in CI. Keep document/socket
-        // cleanup explicit in EngineService and let process exit reclaim the kit,
-        // matching the already-green standalone semantic probe lifecycle.
+        // LibreOffice 24.2.7's external unipoll lifecycle is treated as
+        // process-scoped for this one-document helper PoC. The OS process
+        // boundary reclaims the LOK document/kit; normal C++ destruction here
+        // is limited to our Unix-socket/client resources.
         std::cout << "PASS: isolated Haven Write helper exited cleanly\n";
         return 0;
     }
