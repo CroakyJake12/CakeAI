@@ -236,7 +236,7 @@ public sealed class WineWindowsExeCompatibilityService : IWindowsExeCompatibilit
 
     private static bool IsExecutableFile(string path)
     {
-        if (!File.Exists(path))
+        if (!File.Exists(path) || OperatingSystem.IsWindows())
         {
             return false;
         }
