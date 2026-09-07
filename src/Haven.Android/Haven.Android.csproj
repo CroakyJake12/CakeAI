@@ -21,6 +21,8 @@
     <RootNamespace>Haven.Android</RootNamespace>
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
     <ImplicitUsings>disable</ImplicitUsings>
+    <!-- Ship for real 64-bit ARM phones as well as the x64 emulator used by CI. -->
+    <RuntimeIdentifiers>android-arm64;android-x64</RuntimeIdentifiers>
     <!-- DI-constructed Avalonia controls intentionally have no public parameterless
          constructor; they are reached statically from Haven's control graph. -->
     <NoWarn>$(NoWarn);CA2255;AVLN3001</NoWarn>
