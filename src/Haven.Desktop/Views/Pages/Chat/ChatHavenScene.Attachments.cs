@@ -9,7 +9,22 @@ internal sealed record ChatAttachmentChip(string Id, string Label, string IconKe
 
 internal sealed partial class ChatHavenScene
 {
-    public event EventHandler<string>? AttachmentRemoveRequested;
+    private EventHandler<string>? _attachmentRemoveRequested;
+
+    public event EventHandler<string>? AttachmentRemoveRequested
+    {
+        add
+        {
+            // NewChatPage subscribes while wiring the canonical Chat scene. Use that guaranteed
+            // initialization point to install the composer QoL hooks without weakening or
+            // duplicating the current ChatSessionService send pipeline.
+            EnsureQueuedSendingEnabled();
+            EnsureThreadSettingsEnabled();
+            _attachmentRemoveRequested += value;
+        }
+        remove => _attachmentRemoveRequested -= value;
+    }
+
     public event EventHandler<string>? AttachmentInvoked;
 
     public void SetAttachmentChips(IReadOnlyList<ChatAttachmentChip> chips)
@@ -59,7 +74,7 @@ internal sealed partial class ChatHavenScene
             remove.SetValue(HavenProperties.Height, HavenLength.Px(24));
             remove.SetValue(HavenProperties.MinHeight, HavenLength.Px(24));
             remove.Accessibility.AccessibleName = "Remove " + item.Label;
-            remove.Invoked += (_, _) => AttachmentRemoveRequested?.Invoke(this, item.Id);
+            remove.Invoked += (_, _) => _attachmentRemoveRequested?.Invoke(this, item.Id);
             chip.Add(remove);
             AttachmentChips.Add(chip);
         }
