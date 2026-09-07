@@ -12,7 +12,7 @@ public static class LibreOfficeWriteEngineAvailability
 
         var issues = new List<string>(options.Validate());
         if (!OperatingSystem.IsLinux())
-            issues.Add("The LibreOffice Write engine is currently supported only by the Linux HavenOS host.");
+            issues.Add("The LibreOffice Write engine is currently supported only by the Linux CakeOS host.");
 
         if (issues.Count == 0 && !File.Exists(options.HelperExecutablePath))
             issues.Add($"The Haven Write helper was not found at '{options.HelperExecutablePath}'.");
