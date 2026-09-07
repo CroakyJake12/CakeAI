@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>HavenOS.Canvas</AssemblyName>
+    <RootNamespace>HavenOS.Apps.Canvas</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Tests\**\*.cs" />
+    <ProjectReference Include="..\..\src\Haven.Application\Haven.Application.csproj" />
+    <ProjectReference Include="..\..\src\Haven.Core\Haven.Core.csproj" />
+  </ItemGroup>
+</Project>
