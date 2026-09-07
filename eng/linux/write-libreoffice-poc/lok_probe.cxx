@@ -13,6 +13,8 @@
 
 namespace
 {
+constexpr const char* kEditProofMarker = "HAVEN_WRITE_LOK_EDIT_PROOF_20260907";
+
 std::string fileUrl(const std::filesystem::path& path)
 {
     const auto absolute = std::filesystem::absolute(path).lexically_normal().generic_string();
@@ -54,12 +56,56 @@ bool hasRequiredDocumentApi(LibreOfficeKitDocument* document)
         && document->pClass->getDocumentSize
         && LIBREOFFICEKIT_DOCUMENT_HAS(document, postUnoCommand)
         && document->pClass->postUnoCommand
+        && LIBREOFFICEKIT_DOCUMENT_HAS(document, paste)
+        && document->pClass->paste
+        && LIBREOFFICEKIT_DOCUMENT_HAS(document, getTextSelection)
+        && document->pClass->getTextSelection
         && LIBREOFFICEKIT_DOCUMENT_HAS(document, setAccessibilityState)
         && document->pClass->setAccessibilityState
         && LIBREOFFICEKIT_DOCUMENT_HAS(document, getA11yFocusedParagraph)
         && document->pClass->getA11yFocusedParagraph
         && LIBREOFFICEKIT_DOCUMENT_HAS(document, getA11yCaretPosition)
         && document->pClass->getA11yCaretPosition;
+}
+
+LibreOfficeKitDocument* loadWriterDocument(
+    LibreOfficeKit* kit,
+    const std::filesystem::path& path,
+    const char* options)
+{
+    const auto url = fileUrl(path);
+    LibreOfficeKitDocument* document = kit->pClass->documentLoadWithOptions
+        ? kit->pClass->documentLoadWithOptions(kit, url.c_str(), options)
+        : kit->pClass->documentLoad(kit, url.c_str());
+
+    if (!document || !document->pClass)
+        return nullptr;
+
+    if (!document->pClass->getDocumentType
+        || document->pClass->getDocumentType(document) != LOK_DOCTYPE_TEXT)
+    {
+        document->pClass->destroy(document);
+        return nullptr;
+    }
+
+    return document;
+}
+
+bool selectionContains(LibreOfficeKit* kit, LibreOfficeKitDocument* document, const std::string& expected)
+{
+    document->pClass->postUnoCommand(document, ".uno:SelectAll", nullptr, false);
+
+    char* usedMimeTypeRaw = nullptr;
+    char* selectionRaw = document->pClass->getTextSelection(
+        document,
+        "text/plain;charset=utf-8",
+        &usedMimeTypeRaw);
+
+    const auto selection = takeString(kit, selectionRaw);
+    const auto usedMimeType = takeString(kit, usedMimeTypeRaw);
+    std::cout << "Selection MIME type: " << (usedMimeType.empty() ? "unknown" : usedMimeType) << '\n';
+    std::cout << "Selected text bytes: " << selection.size() << '\n';
+    return selection.find(expected) != std::string::npos;
 }
 }
 
@@ -107,24 +153,12 @@ int main(int argc, char** argv)
         : std::string{};
     std::cout << "LibreOfficeKit version: " << (version.empty() ? "unknown" : version) << '\n';
 
-    const auto sourceUrl = fileUrl(sourcePath);
-    LibreOfficeKitDocument* document = kit->pClass->documentLoadWithOptions
-        ? kit->pClass->documentLoadWithOptions(kit, sourceUrl.c_str(), "ReadOnly=false")
-        : kit->pClass->documentLoad(kit, sourceUrl.c_str());
-    if (!document || !document->pClass)
+    LibreOfficeKitDocument* document = loadWriterDocument(kit, sourcePath, "ReadOnly=false");
+    if (!document)
     {
-        fail(kit, "document load failed");
+        fail(kit, "Writer document load failed");
         kit->pClass->destroy(kit);
         return 68;
-    }
-
-    if (!document->pClass->getDocumentType
-        || document->pClass->getDocumentType(document) != LOK_DOCTYPE_TEXT)
-    {
-        std::cerr << "FAIL: loaded document is not a Writer/text document\n";
-        document->pClass->destroy(document);
-        kit->pClass->destroy(kit);
-        return 69;
     }
 
     if (!hasRequiredDocumentApi(document))
@@ -132,7 +166,7 @@ int main(int argc, char** argv)
         std::cerr << "FAIL: required unstable LibreOfficeKit Writer API members are unavailable\n";
         document->pClass->destroy(document);
         kit->pClass->destroy(kit);
-        return 70;
+        return 69;
     }
 
     document->pClass->initializeForRendering(document, "{\"Author\":\"Haven Write PoC\"}");
@@ -145,7 +179,7 @@ int main(int argc, char** argv)
         std::cerr << "FAIL: Writer reported an invalid document size\n";
         document->pClass->destroy(document);
         kit->pClass->destroy(kit);
-        return 71;
+        return 70;
     }
     std::cout << "Document size (twips): " << widthTwips << " x " << heightTwips << '\n';
 
@@ -171,7 +205,7 @@ int main(int argc, char** argv)
             std::cerr << "FAIL: could not write tile output\n";
             document->pClass->destroy(document);
             kit->pClass->destroy(kit);
-            return 72;
+            return 71;
         }
         std::cout << "Rendered raw 512x512x4 tile: " << tilePath << '\n';
     }
@@ -185,8 +219,31 @@ int main(int argc, char** argv)
     std::cout << "Accessibility caret: " << caret << '\n';
     std::cout << "Accessibility paragraph bytes: " << focusedParagraph.size() << '\n';
 
+    document->pClass->postUnoCommand(document, ".uno:GoToEndOfDoc", nullptr, false);
+    const std::string editProof = std::string(" ") + kEditProofMarker;
+    if (!document->pClass->paste(
+            document,
+            "text/plain;charset=utf-8",
+            editProof.data(),
+            editProof.size()))
+    {
+        fail(kit, "Writer paste edit failed");
+        document->pClass->destroy(document);
+        kit->pClass->destroy(kit);
+        return 72;
+    }
+
+    if (!selectionContains(kit, document, kEditProofMarker))
+    {
+        std::cerr << "FAIL: edited marker was not observable through Writer text selection\n";
+        document->pClass->destroy(document);
+        kit->pClass->destroy(kit);
+        return 73;
+    }
+    std::cout << "PASS: Writer edit is observable through LibreOfficeKit selection\n";
+
     document->pClass->postUnoCommand(document, ".uno:Bold", nullptr, false);
-    std::cout << "UNO command accepted for dispatch: .uno:Bold\n";
+    std::cout << "UNO command dispatched: .uno:Bold (formatting persistence not asserted by this probe)\n";
 
     if (!outputPath.empty())
     {
@@ -197,12 +254,62 @@ int main(int argc, char** argv)
             fail(kit, "saveAs failed");
             document->pClass->destroy(document);
             kit->pClass->destroy(kit);
-            return 73;
+            return 74;
         }
         std::cout << "Saved: " << outputPath << '\n';
+
+        document->pClass->destroy(document);
+        document = nullptr;
+
+        if (!std::filesystem::is_regular_file(outputPath)
+            || std::filesystem::file_size(outputPath) == 0)
+        {
+            std::cerr << "FAIL: saved document is missing or empty\n";
+            kit->pClass->destroy(kit);
+            return 75;
+        }
+
+        LibreOfficeKitDocument* reopened = loadWriterDocument(kit, outputPath, "ReadOnly=true");
+        if (!reopened)
+        {
+            fail(kit, "saved Writer document could not be reopened");
+            kit->pClass->destroy(kit);
+            return 76;
+        }
+        if (!hasRequiredDocumentApi(reopened))
+        {
+            std::cerr << "FAIL: reopened document does not expose the required LibreOfficeKit API\n";
+            reopened->pClass->destroy(reopened);
+            kit->pClass->destroy(kit);
+            return 77;
+        }
+
+        reopened->pClass->initializeForRendering(reopened, "{\"Author\":\"Haven Write PoC\"}");
+        if (!selectionContains(kit, reopened, kEditProofMarker))
+        {
+            std::cerr << "FAIL: edited marker did not survive save/reopen round trip\n";
+            reopened->pClass->destroy(reopened);
+            kit->pClass->destroy(kit);
+            return 78;
+        }
+
+        long reopenedWidth = 0;
+        long reopenedHeight = 0;
+        reopened->pClass->getDocumentSize(reopened, &reopenedWidth, &reopenedHeight);
+        if (reopenedWidth <= 0 || reopenedHeight <= 0)
+        {
+            std::cerr << "FAIL: reopened Writer document reported an invalid size\n";
+            reopened->pClass->destroy(reopened);
+            kit->pClass->destroy(kit);
+            return 79;
+        }
+
+        reopened->pClass->destroy(reopened);
+        std::cout << "PASS: Writer edit survived save/reopen round trip\n";
     }
 
-    document->pClass->destroy(document);
+    if (document)
+        document->pClass->destroy(document);
     kit->pClass->destroy(kit);
     std::cout << "PASS: LibreOfficeKit Writer probe completed\n";
     return 0;
