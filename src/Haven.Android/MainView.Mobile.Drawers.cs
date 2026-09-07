@@ -100,6 +100,16 @@ public sealed partial class MainView
         _mobileDrawerContent.Children.Clear();
         AddDrawerHeading(_mobileDrawerContent, "Actions");
 
+        AddMobileAction(
+            "Models",
+            "Browse device-aware GGUF recommendations or import local models.",
+            "cpu",
+            () =>
+            {
+                CloseMobileDrawer();
+                LaunchAndroidModelRecommendations();
+            });
+
         foreach (var item in AllCommandItems)
         {
             var action = item;
