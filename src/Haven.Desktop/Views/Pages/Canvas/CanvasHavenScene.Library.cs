@@ -23,6 +23,8 @@ internal sealed partial class CanvasHavenScene
     /// </summary>
     private void BuildLibrary()
     {
+        if (_libraryHost is not null) return;
+
         _libraryButton = NewButton("Canvas.Library", "Library");
         _libraryButton.Accessibility.AccessibleName = "Open Canvas library";
         _libraryButton.Invoked += (_, _) => LibraryRequested?.Invoke(this, EventArgs.Empty);
@@ -79,6 +81,7 @@ internal sealed partial class CanvasHavenScene
 
     public void SetLibrary(IReadOnlyList<NotesDocumentSummary> documents)
     {
+        BuildLibrary();
         documents ??= Array.Empty<NotesDocumentSummary>();
         foreach (var child in _libraryRecent.Children.ToArray()) _libraryRecent.Remove(child);
 
@@ -113,8 +116,11 @@ internal sealed partial class CanvasHavenScene
         _libraryHost.SetValue(HavenProperties.Visibility, HavenVisibility.Visible);
     }
 
-    public void ShowWorkspace() =>
-        _libraryHost.SetValue(HavenProperties.Visibility, HavenVisibility.Collapsed);
+    public void ShowWorkspace()
+    {
+        if (_libraryHost is not null)
+            _libraryHost.SetValue(HavenProperties.Visibility, HavenVisibility.Collapsed);
+    }
 
     private static HavenText LibraryHeading(string text)
     {
