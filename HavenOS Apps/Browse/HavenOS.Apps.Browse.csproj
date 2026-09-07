@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>HavenOS.Apps.Browse</AssemblyName>
+    <RootNamespace>HavenOS.Apps.Browse</RootNamespace>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="BrowseAppRoute.cs" />
+    <ProjectReference Include="..\..\src\Haven.Browser\Haven.Browser.csproj" />
+  </ItemGroup>
+</Project>
