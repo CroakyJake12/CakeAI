@@ -128,6 +128,21 @@ This closes the question of whether this PoC needs `libreofficekit-dev`, GTK, LO
 
 The currently demonstrated headless runtime closure is still substantial (about 366 MB added to a minimal Ubuntu 24.04 container and 119 newly installed packages), so production image-size optimisation remains separate packaging work. Do not infer that only the two explicitly requested LibreOffice package names are physically present; their transitive runtime dependencies are required.
 
+## Next blockers
+
+The next **acceptance blocker** is direct execution of the same native/runtime slice on the approved CakeOS/Ubuntu VM. Portable CI cannot close that gate. That environment must remain untouched without fresh explicit user authorization.
+
+Within the isolated draft scope, the next smallest **technical blocker** that can be addressed independently is asynchronous semantic-command completion. The PoC can synchronously paste, render, save, and reopen, but it does not yet provide a helper-owned LibreOffice event/callback loop that can prove semantic commands such as selection and bold have completed before state is read. A minimal next slice is therefore a disposable helper/event-loop probe that:
+
+1. owns LibreOfficeKit on one serialized engine thread;
+2. registers/drains the supported external callback/event path rather than using sleeps;
+3. dispatches an allow-listed semantic command (`SelectAll` first, then `Bold`);
+4. observes selection/format state only after completion evidence;
+5. saves/reopens and independently verifies the formatting result;
+6. remains a standalone PoC, not the production HUI route.
+
+That technical slice does not replace the mandatory CakeOS VM acceptance gate and must not be treated as permission to modify the approved VM or production checkout.
+
 ## Evidence state
 
 As of 2026-09-07:
@@ -151,9 +166,9 @@ As of 2026-09-07:
 | Persisted edit in ODT payload | **Runtime-proven by independent `content.xml` verification** |
 | Prebuilt probe on core-nogui + writer-nogui without LOK dev/GTK packages | **Runtime-proven in minimal Ubuntu 24.04 container** |
 | Direct GTK/LOKDocView dependency in tested probe | **Rejected by runtime-only gate; none observed** |
-| Async semantic/UNO command completion | **Unvalidated** |
+| Async semantic/UNO command completion | **Unvalidated — next isolated technical blocker** |
 | Selection round-trip / bold-format persistence | **Unvalidated** |
-| Approved CakeOS VM package/runtime proof | **Unvalidated — separate mandatory gate** |
+| Approved CakeOS VM package/runtime proof | **Unvalidated — next acceptance blocker; authorization required** |
 | Production helper process/IPC/sandbox | **Not implemented** |
 | HUI document viewport integration | **Deferred until CakeOS VM gate passes** |
 | Complete HUI accessibility bridge | **Deferred; release gate** |
