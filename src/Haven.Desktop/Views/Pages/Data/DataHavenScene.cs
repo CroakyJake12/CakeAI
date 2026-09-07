@@ -84,6 +84,25 @@ internal sealed class DataHavenScene : IDisposable
         StatusText.SetValue(HavenProperties.Foreground, "TextSecondary");
         Root.Add(StatusText);
 
+        Landing = NewCard("Data.Landing");
+        Landing.SetValue(HavenProperties.Row, 2);
+        Landing.SetValue(HavenProperties.Padding, HavenThickness.Parse("30px"));
+        Landing.SetValue(HavenProperties.Gap, HavenLength.Px(14));
+        var landingTitle = new HavenText("Start with Data") { Name = "Data.Landing.Title", Level = TextLevel.H1 };
+        var landingSubtitle = new HavenText("Create a workbook or bring in an existing Excel file. Your workbook opens in the full Data editor when it is ready.") { Name = "Data.Landing.Subtitle", Level = TextLevel.Body };
+        landingSubtitle.SetValue(HavenProperties.Foreground, "TextSecondary");
+        var landingActions = new Container { Name = "Data.Landing.Actions", Layout = HavenLayout.Horizontal };
+        landingActions.SetValue(HavenProperties.Gap, HavenLength.Px(10));
+        LandingNewWorkbookButton = NewButton("Data.Landing.New", "New workbook");
+        LandingNewWorkbookButton.Variant = ButtonVariant.Primary;
+        LandingImportButton = NewButton("Data.Landing.Import", "Import .xlsx");
+        landingActions.Add(LandingNewWorkbookButton);
+        landingActions.Add(LandingImportButton);
+        Landing.Add(landingTitle);
+        Landing.Add(landingSubtitle);
+        Landing.Add(landingActions);
+        Root.Add(Landing);
+
         WorkbookTitleInput.Invalidated += OnWorkbookTitleInvalidated;
         SheetNameInput.Invalidated += OnSheetNameInvalidated;
         CellValueInput.Invalidated += OnCellValueInvalidated;
@@ -96,6 +115,7 @@ internal sealed class DataHavenScene : IDisposable
         VisualGroupInput.Invalidated += OnVisualGroupInvalidated;
         VisualOrderInput.Invalidated += OnVisualOrderInvalidated;
         VisualLimitInput.Invalidated += OnVisualLimitInvalidated;
+        SetLandingState(true);
 
         PreviousWorkbookButton.Invoked += (_, _) => PreviousWorkbookRequested?.Invoke(this, EventArgs.Empty);
         NextWorkbookButton.Invoked += (_, _) => NextWorkbookRequested?.Invoke(this, EventArgs.Empty);
@@ -131,6 +151,7 @@ internal sealed class DataHavenScene : IDisposable
     public event Action<string>? QueryNameChanged; public event Action<string>? SqlChanged; public event Action<string>? VisualSourceChanged; public event Action<string>? VisualColumnsChanged; public event Action<string>? VisualFilterChanged; public event Action<string>? VisualGroupChanged; public event Action<string>? VisualOrderChanged; public event Action<string>? VisualLimitChanged;
 
     public Page Root { get; } public Container Header { get; } public Container WorkbookToolbar { get; } public Container Workspace { get; } public Container Explorer { get; } public Container Editor { get; }
+    public Container Landing { get; } public HavenButton LandingNewWorkbookButton { get; } public HavenButton LandingImportButton { get; }
     public Input WorkbookTitleInput { get; } public HavenText PositionText { get; } public HavenText StatusText { get; }
     public HavenButton PreviousWorkbookButton { get; } public HavenButton NextWorkbookButton { get; } public HavenButton NewWorkbookButton { get; } public HavenButton SaveButton { get; } public HavenButton ImportButton { get; } public HavenButton ExportButton { get; }
     public Input SheetNameInput { get; private set; } = null!; public Container GridHost { get; private set; } = null!; public HavenText GridWindowText { get; private set; } = null!;
@@ -143,7 +164,7 @@ internal sealed class DataHavenScene : IDisposable
 
     public void SetWorkbook(DataWorkbook workbook, int workbookIndex, int workbookCount, int sheetIndex, int queryIndex, int selectedRow, int selectedColumn, int rowOffset, int columnOffset, DataQueryResult? result)
     {
-        ArgumentNullException.ThrowIfNull(workbook); workbook.Normalize();
+        ArgumentNullException.ThrowIfNull(workbook); workbook.Normalize(); SetLandingState(false);
         sheetIndex = Math.Clamp(sheetIndex, 0, workbook.Sheets.Count - 1); queryIndex = Math.Clamp(queryIndex, 0, workbook.Queries.Count - 1);
         var sheet = workbook.Sheets[sheetIndex]; var query = workbook.Queries[queryIndex]; var cell = sheet.GetCell(selectedRow, selectedColumn);
         _suppressChanges = true;
@@ -158,6 +179,16 @@ internal sealed class DataHavenScene : IDisposable
             RebuildExplorer(workbook, sheetIndex); RebuildGrid(sheet, selectedRow, selectedColumn, rowOffset, columnOffset); RebuildQueryTabs(workbook, queryIndex); SetQuerySafety(query.Sql); SetQueryResult(result);
         }
         finally { _suppressChanges = false; }
+    }
+
+    public void SetLandingState(bool showLanding)
+    {
+        Landing.SetValue(HavenProperties.Visibility, showLanding ? HavenVisibility.Visible : HavenVisibility.Collapsed);
+        var editorVisibility = showLanding ? HavenVisibility.Collapsed : HavenVisibility.Visible;
+        Header.SetValue(HavenProperties.Visibility, editorVisibility);
+        WorkbookToolbar.SetValue(HavenProperties.Visibility, editorVisibility);
+        Workspace.SetValue(HavenProperties.Visibility, editorVisibility);
+        StatusText.SetValue(HavenProperties.Visibility, editorVisibility);
     }
 
     public void SetSelectedCell(DataCell? cell, int row, int column)

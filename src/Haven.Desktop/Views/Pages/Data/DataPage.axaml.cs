@@ -65,7 +65,15 @@ public sealed partial class DataPage : UserControl, IDisposable
         try
         {
             await RefreshWorkbooksAsync(cancellationToken);
-            if (_workbooks.Count == 0) await CreateWorkbookAsync(cancellationToken); else await OpenWorkbookAtAsync(0, cancellationToken, false);
+            if (_workbooks.Count == 0)
+            {
+                Workbook = null;
+                _route.SetLandingState(true);
+            }
+            else
+            {
+                await OpenWorkbookAtAsync(0, cancellationToken, false);
+            }
             _autosaveTimer.Start(); _bus.Fire("Data.Opened");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { _initialized = false; throw; }
