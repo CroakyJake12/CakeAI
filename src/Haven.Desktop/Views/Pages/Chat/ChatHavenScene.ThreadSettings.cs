@@ -1,3 +1,4 @@
+using Haven.Core;
 using Haven.Desktop.Views.Shell.TopRail;
 using Haven.UI;
 using Haven.UI.Components;
