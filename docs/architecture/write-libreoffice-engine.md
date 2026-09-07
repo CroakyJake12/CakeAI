@@ -1,6 +1,6 @@
 # Haven Write LibreOffice engine boundary
 
-Status: **portable Linux proof-of-concept runtime-proven; not yet runtime-proven on the approved CakeOS VM or wired into production HUI**.
+Status: **experimental implementation slice; not runtime-proven on the approved CakeOS VM**.
 
 Haven Write keeps HUI as the complete visible application. LibreOffice is treated as an optional Linux document engine behind the platform-neutral `IWriteDocumentEngine` contract in `src/Haven.Application/Write/IWriteDocumentEngine.cs`.
 
@@ -32,36 +32,30 @@ The current `NotesDocument` editor remains the production path. Do not make Writ
 
 ## LibreOfficeKit program path
 
-The path passed to `lok_init_2` must be the directory that directly contains `libsofficeapp.so` or `libmergedlo.so`; LibreOfficeKit appends one of those filenames to the supplied path. Ubuntu packages place these libraries below `/usr/lib/libreoffice/program`, which is therefore the default `LibreOfficeProgramPath` used by this PoC.
-
-The clean Ubuntu 24.04 runtime proof directly observed `/usr/lib/libreoffice/program/libmergedlo.so`, confirming this boundary for that package layout.
+The path passed to `lok_init_2` must be the directory that directly contains `libsofficeapp.so` or `libmergedlo.so`; LibreOfficeKit appends one of those filenames to the supplied path. Ubuntu packages place these libraries below `/usr/lib/libreoffice/program`, which is therefore the default `LibreOfficeProgramPath` used by this PoC. Do not pass `/usr/lib/libreoffice` unless that package layout changes and direct runtime evidence confirms it.
 
 ## Security boundary
 
 The engine must fail closed. Enabling the feature is not enough to make it available: the Linux host, helper executable, LibreOffice program directory, and required native libraries must all be present. A future helper process must run with an isolated profile, minimal filesystem mounts, no network by default, and no unrestricted UNO-command escape hatch exposed to generated UI or model output.
 
-`WriteEngineCommand` is therefore a semantic application request. Platform implementations must allow-list and validate commands before translating them to LibreOffice-native operations.
-
-The Application contract intentionally does not expose the LibreOffice profile directory and does not name UNO as a capability. Provider-specific profile placement, ABI management, event-loop behaviour, and native command mapping stay behind the Infrastructure/helper boundary.
+`WriteEngineCommand` is therefore a semantic application request. Platform implementations must allow-list/validate commands before translating them to LibreOffice UNO commands.
 
 ## Accessibility
 
-Rendered tiles are not sufficient accessibility evidence. The engine contract requires a semantic accessibility snapshot in addition to pixels.
-
-The portable Linux PoC proved that LibreOfficeKit could enable its accessibility state and return both a focused-paragraph payload and caret position on a Writer document. That proves the native data path exists; it does **not** prove a complete HUI accessibility tree, screen-reader behaviour, keyboard navigation announcements, selection semantics, or focus restoration. Those remain release gates.
+Rendered tiles are not sufficient accessibility evidence. The engine contract requires a semantic accessibility snapshot in addition to pixels. The current native PoC probes LibreOfficeKit focused-paragraph and caret APIs, but a complete HUI accessibility bridge remains a release gate.
 
 ## PoC files
 
-`eng/linux/write-libreoffice-poc/lok_probe.cxx` now exercises externally observable operations that a normal LibreOfficeKit client can prove without relying on LibreOffice-internal scheduler helpers:
+`eng/linux/write-libreoffice-poc/lok_probe.cxx` exercises the minimum native API surface needed to decide whether the architecture is viable:
 
 1. initialise LibreOfficeKit from its program directory with an isolated profile;
 2. open a Writer document;
-3. verify required tiled-rendering, editing, persistence, and accessibility API members are present;
+3. verify the required unstable API members are present;
 4. obtain document dimensions;
 5. render one 512x512 tile;
-6. enable/read focused-paragraph and caret accessibility state;
+6. enable/access focused-paragraph and caret accessibility APIs;
 7. insert a unique text marker through LibreOfficeKit `paste()`;
-8. save the edited document as ODT;
+8. save the edited document to ODT;
 9. destroy the first document instance;
 10. reopen the saved ODT through LibreOfficeKit and render it again;
 11. independently inspect the saved ODT payload in CI and require the edit marker to exist in `content.xml`.
@@ -76,17 +70,18 @@ Those behaviours belong in the next helper-process stage, where callback/event-l
 
 ## Clean-Ubuntu validation
 
-`.github/workflows/validate-write-libreoffice-poc.yml` provides a disposable GitHub-hosted Ubuntu validation path. It installs the Writer/headless runtime plus the LibreOfficeKit development headers, restores/builds the focused .NET project, runs the configuration tests, creates a minimal ODT fixture, executes the native round-trip probe, and independently checks the resulting ODT payload.
+`.github/workflows/validate-write-libreoffice-poc.yml` provides a disposable GitHub-hosted Ubuntu validation path. The first job installs the Writer/headless runtime plus LibreOfficeKit development headers, restores/builds the focused .NET project, runs the configuration tests, creates a minimal ODT fixture, executes the native round-trip probe, and publishes a standalone prebuilt probe artifact.
 
-Observed successful run: **GitHub Actions run 34145146782**, branch head `ee56800fb66e1a6a1bf2f2451becb6910784dd0a`.
+Observed successful full workflow run: **GitHub Actions run 34156074150**, branch head `7daa8d5d45e0ad35dfa319ce44178bf3983f46f6`.
 
-Observed environment and results:
+Build-host results:
 
-- Ubuntu 24.04-class GitHub-hosted Linux runner;
+- pinned GitHub-hosted Ubuntu 24.04 runner;
 - `libreoffice-core-nogui`, `libreoffice-writer-nogui`, and `libreofficekit-dev` from the Ubuntu LibreOffice 24.2.7 package family;
-- LibreOfficeKit runtime library found at `/usr/lib/libreoffice/program/libmergedlo.so`;
-- focused Release build: passed with 0 warnings and 0 errors;
+- LibreOfficeKit runtime library found below `/usr/lib/libreoffice/program`;
+- focused Release build: passed;
 - focused configuration/readiness tests: 4 passed, 0 failed;
+- standalone native probe built and published;
 - LibreOfficeKit initialisation and Writer document load: passed;
 - document dimensions: positive and stable across reopen;
 - 512x512x4 tile render: passed, 1,048,576 bytes;
@@ -95,15 +90,43 @@ Observed environment and results:
 - ODT save: passed;
 - saved ODT reopen and second render through LibreOfficeKit: passed;
 - independent ODT `content.xml` check: persisted edit marker present;
-- process cleanup: passed without the cleanup failure seen in the discarded asynchronous-selection experiment.
+- process cleanup: passed.
 
 This is **portable Linux runtime proof**, not CakeOS image/VM acceptance proof.
 
+## Runtime-only packaging proof
+
+The workflow now contains a second job that runs only after the build/probe job succeeds. It downloads the already-built native probe into a fresh `ubuntu:24.04` container and installs only:
+
+- `libreoffice-core-nogui` `4:24.2.7-0ubuntu0.24.04.6`;
+- `libreoffice-writer-nogui` `4:24.2.7-0ubuntu0.24.04.6`.
+
+Observed successful job: **`Prove Writer runtime without LibreOfficeKit/GTK development packages`**, Actions run `34156074150`, exact source head `7daa8d5d45e0ad35dfa319ce44178bf3983f46f6`.
+
+Observed runtime-only evidence:
+
+- no compiler or LibreOfficeKit headers were installed in the runtime container;
+- `libreofficekit-dev`, `liblibreofficekitgtk`, `gir1.2-lokdocview-0.1`, and `libreoffice-gtk3` were explicitly required to be absent;
+- no installed package matching `libgtk-*` was permitted by the gate;
+- `ldd` for the prebuilt Haven probe resolved only its ordinary C/C++ runtime dependencies and showed no direct GTK, LOKDocView, or LibreOfficeKit-GTK dependency;
+- the headless runtime package transaction installed 119 packages (plus one base-image package upgrade), consuming about 366 MB in the minimal container;
+- LibreOfficeKit 24.2.7.2 initialised successfully from the headless runtime;
+- document size was 12808 x 16408 twips before and after reopen;
+- 512x512x4 tile render produced 1,048,576 bytes;
+- focused-paragraph/caret accessibility calls executed;
+- the Writer edit marker was accepted via `paste()`;
+- ODT save succeeded;
+- the saved ODT reopened and rendered successfully;
+- independent inspection outside the container confirmed the edit marker persisted in `content.xml`;
+- the runtime-only job completed successfully.
+
+This closes the question of whether this PoC needs `libreofficekit-dev`, GTK, LOKDocView, or GNOME packages at runtime: **the tested raw-LibreOfficeKit Writer slice does not**. It does not prove that the full future helper/package image has no additional dependencies, and it is not approved CakeOS VM/image evidence.
+
 ## Packaging observation
 
-The Ubuntu 24.04 `libreofficekit-dev` package used to compile the disposable C++ probe pulled a large development dependency closure, including GTK/LOKDocView development packages, despite the PoC itself using raw LibreOfficeKit plus the headless `svp` VCL backend.
+`libreofficekit-dev` remains a build-time dependency for compiling the disposable C++ probe and pulls a much larger development closure including GTK/LOKDocView development packages. The successful runtime-only job proves those development/UI packages are not required by the tested prebuilt raw-LibreOfficeKit Writer runtime slice.
 
-That dependency closure belongs to the **build environment only**. It is not evidence that the production Haven Write runtime requires GTK, `LOKDocView`, or GNOME. Production packaging must separately prove the smallest runtime closure for the prebuilt Haven helper plus `libreoffice-core-nogui`/`libreoffice-writer-nogui`, without shipping `libreofficekit-dev` merely to obtain headers.
+The currently demonstrated headless runtime closure is still substantial (about 366 MB added to a minimal Ubuntu 24.04 container and 119 newly installed packages), so production image-size optimisation remains separate packaging work. Do not infer that only the two explicitly requested LibreOffice package names are physically present; their transitive runtime dependencies are required.
 
 ## Evidence state
 
@@ -115,10 +138,10 @@ As of 2026-09-07:
 | Fail-closed Infrastructure configuration/readiness | **Implemented** |
 | Native LibreOfficeKit probe | **Implemented** |
 | Dedicated clean-Linux CI workflow | **Implemented and executed** |
-| Focused Release .NET build | **Passed — 0 warnings, 0 errors** |
+| Focused Release .NET build | **Passed** |
 | Focused .NET tests | **Passed — 4/4** |
-| Native C++ probe build | **Passed on GitHub-hosted Ubuntu** |
-| Ubuntu LibreOffice/Writer/LOK development package install | **Passed on GitHub-hosted Ubuntu** |
+| Native C++ probe build | **Passed on GitHub-hosted Ubuntu 24.04** |
+| Ubuntu LibreOffice/Writer/LOK development package install | **Passed on build host** |
 | LibreOfficeKit runtime initialisation | **Runtime-proven on GitHub-hosted Ubuntu** |
 | Writer document open and sizing | **Runtime-proven on GitHub-hosted Ubuntu** |
 | Writer 512x512 tile render | **Runtime-proven — 1,048,576-byte tile** |
@@ -126,6 +149,8 @@ As of 2026-09-07:
 | Writer text edit via `paste()` | **Runtime-proven** |
 | ODT save + LOK reopen + rerender | **Runtime-proven** |
 | Persisted edit in ODT payload | **Runtime-proven by independent `content.xml` verification** |
+| Prebuilt probe on core-nogui + writer-nogui without LOK dev/GTK packages | **Runtime-proven in minimal Ubuntu 24.04 container** |
+| Direct GTK/LOKDocView dependency in tested probe | **Rejected by runtime-only gate; none observed** |
 | Async semantic/UNO command completion | **Unvalidated** |
 | Selection round-trip / bold-format persistence | **Unvalidated** |
 | Approved CakeOS VM package/runtime proof | **Unvalidated — separate mandatory gate** |
