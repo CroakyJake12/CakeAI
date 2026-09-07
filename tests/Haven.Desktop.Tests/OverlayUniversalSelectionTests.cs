@@ -43,6 +43,65 @@ public sealed class OverlayUniversalSelectionTests
     }
 
     [Fact]
+    public void Envelope_drops_invalid_bounds_and_marks_the_payload_bounded()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var context = Context(
+            OverlayContextKind.Region,
+            now,
+            [new OverlaySelectionItem(
+                "invalid-region",
+                OverlaySelectionKind.Region,
+                new OverlaySelectionBounds(double.NaN, 0, 100, 40),
+                null,
+                null,
+                null,
+                null,
+                null)]);
+
+        var bounded = context.Bound();
+
+        Assert.Null(Assert.Single(bounded.SelectedItems).Bounds);
+        Assert.True(bounded.WasTruncated);
+        Assert.False(bounded.HasVisualSelection);
+    }
+
+    [Fact]
+    public void Envelope_preserves_normalized_subunit_region_bounds()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var bounds = new OverlaySelectionBounds(.2, .3, .4, .25);
+        var context = Context(
+            OverlayContextKind.Region,
+            now,
+            [new OverlaySelectionItem("region", OverlaySelectionKind.Region, bounds, null, "region.png", null, null, null)]);
+
+        var bounded = context.Bound();
+
+        Assert.Equal(bounds, Assert.Single(bounded.SelectedItems).Bounds);
+        Assert.Equal(bounds, bounded.Provenance.Bounds);
+    }
+
+    [Fact]
+    public void Mixed_text_and_ui_context_does_not_gain_visual_actions_without_visual_payload()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var context = Context(
+            OverlayContextKind.Mixed,
+            now,
+            [
+                new OverlaySelectionItem("text", OverlaySelectionKind.Text, null, "hello", null, null, null, "Text"),
+                new OverlaySelectionItem("button", OverlaySelectionKind.UiComponent, null, null, null, null,
+                    new OverlaySelectionSemanticMetadata("button", "Submit", "submit", "Button", true, false, null, null), "Submit")
+            ]);
+
+        Assert.True(context.HasTextualSelection);
+        Assert.True(context.HasInteractiveSelection);
+        Assert.False(context.HasVisualSelection);
+        Assert.DoesNotContain(OverlayContextActionCatalog.BuildFixed(context), action => action.Id == "analyse");
+    }
+
+    [Fact]
     public void Fixed_actions_are_specific_to_text_control_video_and_region_context()
     {
         var now = DateTimeOffset.UtcNow;

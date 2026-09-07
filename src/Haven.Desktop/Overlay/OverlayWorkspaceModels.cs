@@ -33,7 +33,30 @@ internal enum OverlayContextPermissionState
     Unavailable = 3
 }
 
-internal sealed record OverlaySelectionBounds(double X, double Y, double Width, double Height);
+internal sealed record OverlaySelectionBounds(double X, double Y, double Width, double Height)
+{
+    // Bounds come from UI Automation or the OS capture surface. Keep them finite and
+    // bounded before they reach persistence, prompts, or an attachment review.
+    internal OverlaySelectionBounds? Normalize()
+    {
+        if (!double.IsFinite(X) || !double.IsFinite(Y)
+            || !double.IsFinite(Width) || !double.IsFinite(Height)
+            || Width <= 0 || Height <= 0)
+            return null;
+
+        const double maxCoordinate = 10_000_000;
+        const double maxDimension = 10_000_000;
+        return this with
+        {
+            X = Math.Clamp(X, -maxCoordinate, maxCoordinate),
+            Y = Math.Clamp(Y, -maxCoordinate, maxCoordinate),
+            // Normalized region coordinates commonly use fractions below one;
+            // only cap oversized dimensions and preserve every finite positive value.
+            Width = Math.Min(Width, maxDimension),
+            Height = Math.Min(Height, maxDimension)
+        };
+    }
+}
 
 internal sealed record OverlayContextProvenance(
     string? SourceApplication,
@@ -42,14 +65,59 @@ internal sealed record OverlayContextProvenance(
     DateTimeOffset CapturedAt,
     DateTimeOffset ExpiresAt,
     OverlayContextPermissionState PermissionState,
-    string? PermissionDescription);
+    string? PermissionDescription)
+{
+    internal OverlayContextProvenance Bound(int maxStringLength = 512)
+    {
+        if (maxStringLength < 1) throw new ArgumentOutOfRangeException(nameof(maxStringLength));
+        return this with
+        {
+            SourceApplication = Limit(SourceApplication, maxStringLength),
+            SourceWindow = Limit(SourceWindow, maxStringLength),
+            Bounds = Bounds?.Normalize(),
+            PermissionDescription = Limit(PermissionDescription, maxStringLength * 2)
+        };
+    }
+
+    private static string? Limit(string? value, int maxLength) =>
+        string.IsNullOrEmpty(value) || value.Length <= maxLength ? value : value[..maxLength];
+}
 
 internal sealed record OverlayContextAttachmentReference(
     string Id,
     string Kind,
     string? MimeType,
     string? DisplayName,
-    string? MetadataJson);
+    string? MetadataJson)
+{
+    internal OverlayContextAttachmentReference Bound(
+        int maxIdLength = 4_096,
+        int maxDisplayNameLength = 512,
+        int maxMetadataLength = 8_192)
+    {
+        if (maxIdLength < 1) throw new ArgumentOutOfRangeException(nameof(maxIdLength));
+        if (maxDisplayNameLength < 1) throw new ArgumentOutOfRangeException(nameof(maxDisplayNameLength));
+        if (maxMetadataLength < 1) throw new ArgumentOutOfRangeException(nameof(maxMetadataLength));
+        return this with
+        {
+            Id = Limit(Id, maxIdLength) ?? string.Empty,
+            Kind = Limit(Kind, 128) ?? string.Empty,
+            MimeType = Limit(MimeType, 128),
+            // Display names are shown to users. Preserve the truncation marker so a
+            // bounded label cannot be mistaken for the complete source name.
+            DisplayName = LimitWithEllipsis(DisplayName, maxDisplayNameLength),
+            MetadataJson = Limit(MetadataJson, maxMetadataLength)
+        };
+    }
+
+    private static string? Limit(string? value, int maxLength) =>
+        string.IsNullOrEmpty(value) || value.Length <= maxLength ? value : value[..maxLength];
+
+    private static string? LimitWithEllipsis(string? value, int maxLength) =>
+        string.IsNullOrEmpty(value) || value.Length <= maxLength
+            ? value
+            : maxLength == 1 ? "…" : value[..(maxLength - 1)] + "…";
+}
 
 internal sealed record OverlaySelectionSemanticMetadata(
     string? Role,
@@ -102,8 +170,10 @@ internal sealed record OverlaySelectionItem(
         return this with
         {
             Id = string.IsNullOrWhiteSpace(Id) ? Guid.NewGuid().ToString("N") : Limit(Id, 256)!,
+            Bounds = Bounds?.Normalize(),
             Text = Limit(Text, maxTextLength),
-            DisplayName = Limit(DisplayName, maxDisplayNameLength),
+            DisplayName = LimitWithEllipsis(DisplayName, maxDisplayNameLength),
+            Attachment = Attachment?.Bound(),
             MediaReference = Limit(MediaReference, 4_096),
             Semantic = Semantic?.Bound()
         };
@@ -111,6 +181,11 @@ internal sealed record OverlaySelectionItem(
 
     private static string? Limit(string? value, int maxLength) =>
         string.IsNullOrEmpty(value) || value.Length <= maxLength ? value : value[..maxLength];
+
+    private static string? LimitWithEllipsis(string? value, int maxLength) =>
+        string.IsNullOrEmpty(value) || value.Length <= maxLength
+            ? value
+            : maxLength == 1 ? "…" : value[..(maxLength - 1)] + "…";
 }
 
 internal sealed record OverlayContextEnvelope(
@@ -126,24 +201,30 @@ internal sealed record OverlayContextEnvelope(
 
     public bool HasTextualSelection =>
         !string.IsNullOrWhiteSpace(SelectedText)
-        || Kind is OverlayContextKind.Text or OverlayContextKind.Mixed
-        || SelectedItems.Any(item => item.Kind == OverlaySelectionKind.Text);
+        || SelectedItems.Any(item => item.Kind == OverlaySelectionKind.Text
+            && !string.IsNullOrWhiteSpace(item.Text));
 
     public bool HasVisualSelection =>
-        Kind is OverlayContextKind.Image or OverlayContextKind.Region or OverlayContextKind.Mixed or OverlayContextKind.Video or OverlayContextKind.Window or OverlayContextKind.Screen
-        || SelectedItems.Any(item => item.Kind is OverlaySelectionKind.Image or OverlaySelectionKind.Region or OverlaySelectionKind.Video or OverlaySelectionKind.Window or OverlaySelectionKind.Screen);
+        SelectedItems.Any(item => item.Kind is OverlaySelectionKind.Image or OverlaySelectionKind.Region
+            or OverlaySelectionKind.Video or OverlaySelectionKind.Window or OverlaySelectionKind.Screen
+            && item.HasPayload)
+        || (Kind is OverlayContextKind.Image or OverlayContextKind.Region or OverlayContextKind.Video
+            or OverlayContextKind.Window or OverlayContextKind.Screen)
+            && (Attachments.Count > 0 || !string.IsNullOrWhiteSpace(MediaReference));
 
     public bool HasInteractiveSelection =>
-        Kind == OverlayContextKind.UiComponent
-        || SelectedItems.Any(item => item.Kind == OverlaySelectionKind.UiComponent);
+        SelectedItems.Any(item => item.Kind == OverlaySelectionKind.UiComponent && item.HasPayload);
 
     public bool HasMediaSelection =>
-        Kind == OverlayContextKind.Video
-        || SelectedItems.Any(item => item.Kind == OverlaySelectionKind.Video);
+        (Kind == OverlayContextKind.Video
+            && (Attachments.Count > 0 || !string.IsNullOrWhiteSpace(MediaReference)))
+        || SelectedItems.Any(item => item.Kind == OverlaySelectionKind.Video && item.HasPayload);
 
     public bool HasWindowOrScreenSelection =>
-        Kind is OverlayContextKind.Window or OverlayContextKind.Screen
-        || SelectedItems.Any(item => item.Kind is OverlaySelectionKind.Window or OverlaySelectionKind.Screen);
+        (Kind is OverlayContextKind.Window or OverlayContextKind.Screen)
+            && (Attachments.Count > 0 || !string.IsNullOrWhiteSpace(MediaReference))
+        || SelectedItems.Any(item => item.Kind is OverlaySelectionKind.Window or OverlaySelectionKind.Screen
+            && item.HasPayload);
 
     public bool HasPayload => !string.IsNullOrWhiteSpace(SelectedText)
                               || Attachments.Count > 0
@@ -169,14 +250,19 @@ internal sealed record OverlayContextEnvelope(
             truncated = true;
         }
 
-        var attachments = Attachments.Take(maxAttachments).ToList();
-        if (attachments.Count != Attachments.Count) truncated = true;
+        var rawAttachments = Attachments ?? [];
+        var attachments = rawAttachments.Take(maxAttachments).Select(item => item.Bound()).ToList();
+        if (attachments.Count != rawAttachments.Count) truncated = true;
+        if (rawAttachments.Zip(attachments).Any(pair => pair.First != pair.Second)) truncated = true;
 
-        var selections = SelectedItems.Take(maxSelections).Select(item => item.Bound()).ToList();
-        if (selections.Count != SelectedItems.Count) truncated = true;
-        if (SelectedItems.Zip(selections).Any(pair => pair.First.Text?.Length != pair.Second.Text?.Length
+        var rawSelections = SelectedItems;
+        var selections = rawSelections.Take(maxSelections).Select(item => item.Bound()).ToList();
+        if (selections.Count != rawSelections.Count) truncated = true;
+        if (rawSelections.Zip(selections).Any(pair => pair.First.Text?.Length != pair.Second.Text?.Length
                                                      || pair.First.DisplayName?.Length != pair.Second.DisplayName?.Length
-                                                     || pair.First.MediaReference?.Length != pair.Second.MediaReference?.Length))
+                                                     || pair.First.MediaReference?.Length != pair.Second.MediaReference?.Length
+                                                     || pair.First.Bounds != pair.Second.Bounds
+                                                     || pair.First.Attachment != pair.Second.Attachment))
             truncated = true;
 
         return this with
@@ -184,6 +270,7 @@ internal sealed record OverlayContextEnvelope(
             SelectedText = text,
             Attachments = attachments,
             Selections = selections,
+            Provenance = Provenance.Bound(),
             WasTruncated = truncated
         };
     }

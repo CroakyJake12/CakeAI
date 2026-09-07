@@ -11,16 +11,20 @@ namespace Haven.Desktop.Overlay;
 /// <summary>Owns Desktop Overlay lifecycle while reusing production Chat and normal capability permission/preflight policy.</summary>
 internal sealed class OverlayWorkspaceController : IAsyncDisposable
 {
+    private sealed record OverlayCaptureDraft(OverlayContextEnvelope SourceContext, string SourcePath);
+
     private readonly OverlayWorkspaceRegistry _registry;
     private readonly OverlayContextActionCandidateService _actionCandidates;
     private readonly OverlayForegroundContextCaptureService _contextCapture;
     private readonly OverlayVisualContextCaptureService _visualCapture;
+    private readonly OverlayRegionCaptureService _regionCapture;
     private readonly OverlayChatSessionFactory _chats;
     private readonly OverlayGoSessionFactory _go;
     private readonly OverlayGlobalHotkey _hotkey;
     private readonly NotificationService _notifications;
     private readonly Dictionary<Guid, OverlayWorkspaceWindow> _windows = [];
     private readonly Dictionary<Guid, CancellationTokenSource> _geometryUpdates = [];
+    private readonly Dictionary<Guid, OverlayCaptureDraft> _captureDrafts = [];
     private bool _initialized;
     private bool _disposed;
 
@@ -29,6 +33,7 @@ internal sealed class OverlayWorkspaceController : IAsyncDisposable
         OverlayContextActionCandidateService actionCandidates,
         OverlayForegroundContextCaptureService contextCapture,
         OverlayVisualContextCaptureService visualCapture,
+        OverlayRegionCaptureService regionCapture,
         OverlayChatSessionFactory chats,
         OverlayGoSessionFactory go,
         OverlayGlobalHotkey hotkey,
@@ -38,6 +43,7 @@ internal sealed class OverlayWorkspaceController : IAsyncDisposable
         _actionCandidates = actionCandidates;
         _contextCapture = contextCapture;
         _visualCapture = visualCapture;
+        _regionCapture = regionCapture;
         _chats = chats;
         _go = go;
         _hotkey = hotkey;
@@ -84,7 +90,7 @@ internal sealed class OverlayWorkspaceController : IAsyncDisposable
             cancellationToken);
         await _registry.UpdateGeometryAsync(
             session.Id,
-            new OverlaySurfaceGeometry(860, 600, 80, 110),
+            new OverlaySurfaceGeometry(460, 400, 80, 110),
             cancellationToken);
         session = _registry.Snapshot.Sessions.First(item => item.Id == session.Id);
 
@@ -195,6 +201,10 @@ internal sealed class OverlayWorkspaceController : IAsyncDisposable
         _windows[session.Id] = window;
         WireWindow(window, session.Id, openGoOnNewWorkspace: true);
         window.CaptureRequested += (_, _) => RunOnUi(() => CaptureVisualContextAsync(session.Id));
+        window.ApplySelectionRequested += (_, _) => RunOnUi(() => ApplyRegionSelectionAsync(session.Id));
+        window.ReplaceCaptureRequested += (_, _) => RunOnUi(() => CaptureVisualContextAsync(session.Id));
+        window.ClearSelectionRequested += (_, _) => RunOnUi(() => ClearRegionSelectionAsync(session.Id));
+        window.OverlayBackRequested += (_, _) => RunOnUi(() => NavigateBackAsync(session.Id));
         window.ActionRequested += (_, action) => RunOnUi(() => HandleActionAsync(session.Id, action));
     }
 
@@ -218,6 +228,10 @@ internal sealed class OverlayWorkspaceController : IAsyncDisposable
                 RunOnUi(() => AttachFilesToGoAsync(session.Id, page));
         };
         window.CaptureRequested += (_, _) => RunOnUi(() => CaptureVisualContextAsync(session.Id));
+        window.ApplySelectionRequested += (_, _) => RunOnUi(() => ApplyRegionSelectionAsync(session.Id));
+        window.ReplaceCaptureRequested += (_, _) => RunOnUi(() => CaptureVisualContextAsync(session.Id));
+        window.ClearSelectionRequested += (_, _) => RunOnUi(() => ClearRegionSelectionAsync(session.Id));
+        window.OverlayBackRequested += (_, _) => RunOnUi(() => NavigateBackAsync(session.Id));
         window.SetSuggestions(page.Suggestions.Select(suggestion => suggestion.Label).ToArray());
         window.ActionRequested += (_, action) => RunOnUi(() => HandleGoActionAsync(session.Id, action));
         window.SubmitRequested += (_, text) => RunOnUi(() => page.SubmitOverlayInstructionAsync(text));
@@ -288,24 +302,133 @@ internal sealed class OverlayWorkspaceController : IAsyncDisposable
 
     private async Task CaptureVisualContextAsync(Guid sessionId)
     {
-        if (!_windows.ContainsKey(sessionId)) return;
+        if (!_windows.TryGetValue(sessionId, out var window)) return;
+        var restoreVisible = window.WorkspaceVisible;
+        if (restoreVisible) window.HideWorkspace();
+        OverlayContextEnvelope? context = null;
+        string? captureError = null;
         try
         {
-            var context = await _visualCapture.CaptureAsync(CancellationToken.None);
-            if (!await _registry.SetContextAsync(sessionId, context, CancellationToken.None)) return;
-            if (_windows.TryGetValue(sessionId, out var window))
-            {
-                window.ShowAndActivate();
-                if (window.GoPage is { } page)
-                    QueueGoSuggestionRefresh(sessionId, page, "The user captured new visual Overlay context.");
-            }
+            context = await _visualCapture.CaptureWithStatusAsync(CancellationToken.None);
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            captureError = "Screen capture cancelled; any existing context remains active.";
+        }
         catch (Exception exception)
         {
             _notifications.Show("Overlay capture unavailable", exception.Message, ToastKind.Warning, TimeSpan.FromSeconds(6));
+            captureError = "Screen capture failed: " + exception.Message;
         }
+        finally
+        {
+            if (restoreVisible && _windows.TryGetValue(sessionId, out var restored)) restored.ShowAndActivate();
+        }
+
+        if (!_windows.TryGetValue(sessionId, out var currentWindow)
+            || !_registry.Snapshot.Sessions.Any(session => session.Id == sessionId))
+        {
+            if (context is not null) _visualCapture.CleanupCapture(context);
+            return;
+        }
+        window = currentWindow;
+        if (context is null)
+        {
+            window.SetRegionStatus(captureError ?? "Screen capture did not produce a selection.");
+            return;
+        }
+        var sourcePath = SourceCapturePath(context);
+        if (!context.HasPayload || sourcePath is null)
+        {
+            _visualCapture.CleanupCapture(context);
+            window.SetRegionStatus(context.Provenance.PermissionDescription ?? "Screen capture did not produce an image.");
+            return;
+        }
+
+        var previous = _captureDrafts.GetValueOrDefault(sessionId);
+        _captureDrafts[sessionId] = new OverlayCaptureDraft(context, sourcePath);
+        if (previous is not null) _visualCapture.CleanupCapture(previous.SourceContext);
+        window.ShowRegionDraft(sourcePath, "Captured real screen content. Drag over the frame to choose a region.");
+        if (window.GoPage is { } page)
+            QueueGoSuggestionRefresh(sessionId, page, "The user captured new visual Overlay context.");
     }
+
+    private async Task ApplyRegionSelectionAsync(Guid sessionId)
+    {
+        if (!_windows.TryGetValue(sessionId, out var window)) return;
+        if (!_captureDrafts.TryGetValue(sessionId, out var draft))
+        {
+            window.SetRegionStatus("Capture a real screen or window before applying a region.");
+            return;
+        }
+        if (draft.SourceContext.IsExpired(DateTimeOffset.UtcNow))
+        {
+            window.SetRegionStatus("The captured frame expired. Replace capture before selecting a region.");
+            return;
+        }
+        if (window.SelectedRegion is not Haven.UI.HavenRect selection)
+        {
+            window.SetRegionStatus("Drag over the captured frame to choose a region first.");
+            return;
+        }
+
+        OverlayContextEnvelope region;
+        try
+        {
+            var viewport = window.RegionPreviewViewport;
+            region = await _regionCapture.CreateRegionAsync(
+                draft.SourceContext,
+                selection,
+                viewport.Width,
+                viewport.Height,
+                CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+            window.SetRegionStatus("Region selection cancelled; the existing context remains active.");
+            return;
+        }
+        catch (Exception exception)
+        {
+            window.SetRegionStatus("Region selection failed: " + exception.Message);
+            return;
+        }
+
+        var previous = _registry.Snapshot.Sessions.FirstOrDefault(item => item.Id == sessionId)?.Context;
+        try
+        {
+            if (!await _registry.SetContextAsync(sessionId, region, CancellationToken.None))
+            {
+                _regionCapture.CleanupRegion(region);
+                window.SetRegionStatus("The Overlay session closed before the region could be applied.");
+                return;
+            }
+        }
+        catch (Exception exception)
+        {
+            _regionCapture.CleanupRegion(region);
+            window.SetRegionStatus("The region could not be applied: " + exception.Message);
+            return;
+        }
+        if (previous is not null) _regionCapture.CleanupRegion(previous);
+        window.SetRegionStatus("Region applied. The selected highlight remains visible.");
+    }
+
+    private async Task ClearRegionSelectionAsync(Guid sessionId)
+    {
+        if (!_windows.TryGetValue(sessionId, out var window)) return;
+        var previous = _registry.Snapshot.Sessions.FirstOrDefault(item => item.Id == sessionId)?.Context;
+        if (!await _registry.SetContextAsync(sessionId, null, CancellationToken.None)) return;
+        if (previous is not null) _regionCapture.CleanupRegion(previous);
+        if (_captureDrafts.Remove(sessionId, out var draft)) _visualCapture.CleanupCapture(draft.SourceContext);
+        window.ClearRegionDraft();
+    }
+
+    private static string? SourceCapturePath(OverlayContextEnvelope context) =>
+        context.Attachments.FirstOrDefault(attachment =>
+            string.Equals(attachment.Kind, "image", StringComparison.OrdinalIgnoreCase)
+            && File.Exists(attachment.Id))?.Id;
+
     private async Task HandleGoActionAsync(Guid sourceSessionId, OverlayContextActionDescriptor action)
     {
         var source = _registry.Snapshot.Sessions.FirstOrDefault(item => item.Id == sourceSessionId);
@@ -348,6 +471,13 @@ internal sealed class OverlayWorkspaceController : IAsyncDisposable
         await _registry.SetPinnedAsync(sessionId, !current.IsPinned, CancellationToken.None);
     }
 
+    private Task NavigateBackAsync(Guid sessionId)
+    {
+        if (_windows.TryGetValue(sessionId, out var window) && window.TryNavigateBack())
+            window.ShowAndActivate();
+        return Task.CompletedTask;
+    }
+
     private async Task ActivateAsync(Guid sessionId)
     {
         if (!await _registry.ActivateAsync(sessionId, CancellationToken.None)) return;
@@ -356,15 +486,26 @@ internal sealed class OverlayWorkspaceController : IAsyncDisposable
 
     private async Task CloseSessionAsync(Guid sessionId)
     {
+        await CleanupSessionArtifactsAsync(sessionId, clearRegistryContext: true);
         await _registry.CloseSessionAsync(sessionId, CancellationToken.None);
         CloseWindow(sessionId);
     }
 
     private async Task HandleNativeCloseAsync(Guid sessionId)
     {
+        await CleanupSessionArtifactsAsync(sessionId, clearRegistryContext: true);
         _windows.Remove(sessionId);
         CancelGeometryUpdate(sessionId);
         await _registry.CloseSessionAsync(sessionId, CancellationToken.None);
+    }
+
+    private async Task CleanupSessionArtifactsAsync(Guid sessionId, bool clearRegistryContext)
+    {
+        var current = _registry.Snapshot.Sessions.FirstOrDefault(item => item.Id == sessionId)?.Context;
+        if (clearRegistryContext && current is not null
+            && !await _registry.SetContextAsync(sessionId, null, CancellationToken.None)) return;
+        if (current is not null) _regionCapture.CleanupRegion(current);
+        if (_captureDrafts.Remove(sessionId, out var draft)) _visualCapture.CleanupCapture(draft.SourceContext);
     }
 
     private async Task HandleActionAsync(Guid sessionId, OverlayContextActionDescriptor action)
@@ -632,6 +773,10 @@ internal sealed class OverlayWorkspaceController : IAsyncDisposable
         _hotkey.Pressed -= OnHotkeyPressed;
         foreach (var cancellation in _geometryUpdates.Values.ToArray()) cancellation.Cancel();
         _geometryUpdates.Clear();
+        foreach (var sessionId in _captureDrafts.Keys.ToArray())
+            await CleanupSessionArtifactsAsync(sessionId, clearRegistryContext: true);
+        foreach (var sessionId in _registry.Snapshot.Sessions.Select(session => session.Id).ToArray())
+            if (!_captureDrafts.ContainsKey(sessionId)) await CleanupSessionArtifactsAsync(sessionId, clearRegistryContext: true);
         foreach (var window in _windows.Values.ToArray()) window.CloseFromController();
         _windows.Clear();
         await _hotkey.DisposeAsync();

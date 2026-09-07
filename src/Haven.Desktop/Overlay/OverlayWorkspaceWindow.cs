@@ -35,16 +35,19 @@ internal sealed class OverlayWorkspaceWindow : Window
 
         _chatPage = chatPage;
         GoPage = goPage;
-        BodyControl = (Control?)chatPage ?? goPage!;
         SessionId = session.Id;
         ShellScene = new OverlayShellHavenScene();
         ShellControl = new HavenSceneControl { Root = ShellScene.Root };
+        // The production pages are execution backends only. The visible body is
+        // the compact HavenUI shell; never mount a full-size page in this window.
+        BodyControl = ShellControl;
+        ShellScene.SetBackNavigation(false);
 
         Title = "Haven Overlay — " + session.Title;
-        Width = Math.Clamp(session.Geometry.Width, 480, 720);
-        Height = Math.Clamp(session.Geometry.Height, 360, 560);
-        MinWidth = 480;
-        MinHeight = 360;
+        Width = Math.Clamp(session.Geometry.Width, 400, 560);
+        Height = Math.Clamp(session.Geometry.Height, 240, 480);
+        MinWidth = 400;
+        MinHeight = 240;
         CanResize = true;
         ShowInTaskbar = false;
         Topmost = true;
@@ -59,8 +62,8 @@ internal sealed class OverlayWorkspaceWindow : Window
         AutomationProperties.SetName(this, "Haven Overlay " + session.Title);
         AutomationProperties.SetAutomationId(ShellControl, "HavenOverlayShell");
         AutomationProperties.SetName(ShellControl, "Haven Overlay controls");
-        AutomationProperties.SetAutomationId(BodyControl, goPage is not null ? "HavenOverlayGo" : "HavenOverlayChat");
-        AutomationProperties.SetName(BodyControl, goPage is not null ? "Haven Overlay Go workspace" : "Haven Overlay Chat workspace");
+        AutomationProperties.SetAutomationId(BodyControl, "HavenOverlayCompactHost");
+        AutomationProperties.SetName(BodyControl, "Haven Overlay compact app host");
 
         Content = CreateVisualRoot(ShellControl, chatPage, goPage);
         ShellControl.InputSubmitted += input =>
@@ -69,6 +72,10 @@ internal sealed class OverlayWorkspaceWindow : Window
         };
         ShellScene.DragDelta += OnDragDelta;
         ShellScene.CaptureRequested += (_, _) => CaptureRequested?.Invoke(this, EventArgs.Empty);
+        ShellScene.ApplySelectionRequested += (_, _) => ApplySelectionRequested?.Invoke(this, EventArgs.Empty);
+        ShellScene.ReplaceCaptureRequested += (_, _) => ReplaceCaptureRequested?.Invoke(this, EventArgs.Empty);
+        ShellScene.ClearSelectionRequested += (_, _) => ClearSelectionRequested?.Invoke(this, EventArgs.Empty);
+        ShellScene.BackRequested += (_, _) => OverlayBackRequested?.Invoke(this, EventArgs.Empty);
         ShellScene.NewChatRequested += (_, _) => NewChatRequested?.Invoke(this, EventArgs.Empty);
         ShellScene.PinToggleRequested += (_, _) => PinToggleRequested?.Invoke(this, EventArgs.Empty);
         ShellScene.CollapseToggleRequested += (_, _) => CollapseToggleRequested?.Invoke(this, EventArgs.Empty);
@@ -95,8 +102,13 @@ internal sealed class OverlayWorkspaceWindow : Window
     public OverlayShellHavenScene ShellScene { get; }
     public HavenSceneControl ShellControl { get; }
     public bool WorkspaceVisible => IsVisible;
+    public bool CanNavigateBack => ShellScene.AppHost.CanNavigateBack;
 
     public event EventHandler? CaptureRequested;
+    public event EventHandler? ApplySelectionRequested;
+    public event EventHandler? ReplaceCaptureRequested;
+    public event EventHandler? ClearSelectionRequested;
+    public event EventHandler? OverlayBackRequested;
     public event EventHandler? NewChatRequested;
     public event EventHandler? PinToggleRequested;
     public event EventHandler? CollapseToggleRequested;
@@ -135,14 +147,24 @@ internal sealed class OverlayWorkspaceWindow : Window
         }
 
         CanResize = true;
-        MinWidth = 480;
-        MinHeight = 360;
-        Width = Math.Clamp(current.Geometry.Width, 480, 720);
-        Height = Math.Clamp(current.Geometry.Height, 360, 560);
+        MinWidth = 400;
+        MinHeight = 240;
+        Width = Math.Clamp(current.Geometry.Width, 400, 560);
+        Height = Math.Clamp(current.Geometry.Height, 240, 480);
         Position = new PixelPoint((int)Math.Round(current.Geometry.X), (int)Math.Round(current.Geometry.Y));
         if (IsVisible) EnsureVisibleOnAvailableScreen();
     }    public void SetActions(IReadOnlyList<OverlayContextActionDescriptor> actions) => ShellScene.SetActions(actions);
     public void SetSuggestions(IReadOnlyList<string> labels) => ShellScene.SetSuggestions(labels);
+
+    public void PushRoute(OverlayCompactAppRoute route)
+    {
+        ShellScene.NavigateTo(route);
+    }
+
+    public bool TryNavigateBack()
+    {
+        return ShellScene.NavigateBack();
+    }
 
     public OverlaySurfaceGeometry CaptureGeometry() => new(
         Math.Max(MinWidth, Width),
@@ -163,6 +185,18 @@ internal sealed class OverlayWorkspaceWindow : Window
     {
         if (IsVisible) Hide();
     }
+
+    public Haven.UI.HavenRect? SelectedRegion => ShellScene.SelectedRegion;
+
+    public (double Width, double Height) RegionPreviewViewport =>
+        (Math.Max(1, ShellScene.RegionPreview.Bounds.Width - 24),
+            Math.Max(1, ShellScene.RegionPreview.Bounds.Height - 24));
+
+    public void ShowRegionDraft(string sourcePath, string status) => ShellScene.ShowRegionDraft(sourcePath, status);
+
+    public void SetRegionStatus(string status) => ShellScene.SetRegionStatus(status);
+
+    public void ClearRegionDraft() => ShellScene.ClearRegionDraft();
 
     public void CloseFromController()
     {

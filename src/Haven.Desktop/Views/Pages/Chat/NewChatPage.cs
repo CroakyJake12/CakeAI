@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using Avalonia.Automation;
@@ -87,6 +88,9 @@ public sealed partial class NewChatPage : UserControl, IDisposable
     private bool _lastReportedHasStarted;
     private bool _disposed;
     private long _sendStartTick;
+    private string? _projectionStatus;
+    private ChatProjectionState _projectionState = ChatProjectionState.Empty;
+    private bool _projectionDirty = true;
 
     public NewChatPage(
         HavenEventBus bus,
@@ -169,6 +173,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
 
     public event EventHandler? ModelChanged;
     public event EventHandler? ConversationStateChanged;
+    public event EventHandler<ChatProjectionStateChangedEventArgs>? ProjectionStateChanged;
     public event EventHandler<AddMenu.AddMenuAction>? AddActionSelected;
     public event EventHandler<AddMenuSelection>? AddCatalogItemSelected;
 
@@ -180,6 +185,30 @@ public sealed partial class NewChatPage : UserControl, IDisposable
     public bool HasStarted => _messages.Count > 0;
     public string ActiveAgentName => _activeAgent?.Name ?? "No Agent (Default)";
     public ChatActionMode EffectiveChatActionMode => _chatActionModeOverride ?? ChatActionMode.AllowBasicActions;
+    public bool IsSending => _isSending;
+
+    public ChatProjectionState ProjectionState
+    {
+        get
+        {
+            if (_projectionDirty) RebuildProjectionState();
+            return _projectionState;
+        }
+    }
+
+    /// <summary>
+    /// Requests cancellation through the same cancellation source used by the full Chat surface.
+    /// Returns false when no response is currently cancellable.
+    /// </summary>
+    public bool TryStopResponse()
+    {
+        var cancellation = _sendCancellation;
+        if (cancellation is null || cancellation.IsCancellationRequested) return false;
+
+        SetProjectionStatus("Stopping response...");
+        cancellation.Cancel();
+        return true;
+    }
 
     public void ConfigureMode(ModeDefinition mode)
     {
@@ -201,7 +230,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
             "launcher" => "Find an app, project, command or recent item",
             _ => $"Ask Haven {mode.Name}"
         });
-        _scene.SetStatus(mode.Description);
+        SetProjectionStatus(mode.Description);
         ConversationStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -214,7 +243,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         _chatActionModeOverride = null;
         _chatGenerativeUiResponseModeOverride = null;
         _scene.SetComposerPlaceholder("Describe your task");
-        _scene.SetStatus("Describe what you want Haven to complete. Haven will ask only for details that materially affect the result.");
+        SetProjectionStatus("Describe what you want Haven to complete. Haven will ask only for details that materially affect the result.");
         ConversationStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -223,7 +252,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         ArgumentNullException.ThrowIfNull(model);
         _selectedModel = model;
         _preferences.SetModelDefaults(model.Name, _preferences.DefaultEffort);
-        _scene.SetStatus(null);
+        SetProjectionStatus(null);
         ModelChanged?.Invoke(this, EventArgs.Empty);
         RefreshVisualState();
         TrySubmitPendingInstruction();
@@ -238,7 +267,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
             {
                 var selectedName = _selectedModel?.Name ?? _preferences.DefaultModel;
                 _selectedModel = models.FirstOrDefault(model => model.Name.Equals(selectedName, StringComparison.OrdinalIgnoreCase)) ?? models.FirstOrDefault();
-                _scene.SetStatus(_selectedModel is null ? "No local model is available." : null);
+                SetProjectionStatus(_selectedModel is null ? "No local model is available." : null);
                 ModelChanged?.Invoke(this, EventArgs.Empty);
                 RefreshVisualState();
                 TrySubmitPendingInstruction();
@@ -304,13 +333,13 @@ public sealed partial class NewChatPage : UserControl, IDisposable
     {
         if (_isSending)
         {
-            _scene.SetStatus("Stop the current response before undoing a message.");
+            SetProjectionStatus("Stop the current response before undoing a message.");
             return;
         }
         if (!await EnsureConversationMayActAsync("chat.undo")) return;
         if (_messages.Count == 0)
         {
-            _scene.SetStatus("There is no message to undo.");
+            SetProjectionStatus("There is no message to undo.");
             return;
         }
 
@@ -322,12 +351,12 @@ public sealed partial class NewChatPage : UserControl, IDisposable
             _messages.RemoveAt(_messages.Count - 1);
             _redoMessages.Push(message);
             RefreshMessages();
-            _scene.SetStatus("Undid the latest message. Use Redo to restore it.");
+            SetProjectionStatus("Undid the latest message. Use Redo to restore it.");
             ConversationStateChanged?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception exception) when (exception is InvalidOperationException or NotSupportedException or IOException)
         {
-            _scene.SetStatus("The latest message could not be undone: " + exception.Message);
+            SetProjectionStatus("The latest message could not be undone: " + exception.Message);
         }
     }
 
@@ -335,13 +364,13 @@ public sealed partial class NewChatPage : UserControl, IDisposable
     {
         if (_isSending)
         {
-            _scene.SetStatus("Stop the current response before redoing a message.");
+            SetProjectionStatus("Stop the current response before redoing a message.");
             return;
         }
         if (!await EnsureConversationMayActAsync("chat.redo")) return;
         if (_redoMessages.Count == 0)
         {
-            _scene.SetStatus("There is no undone message to restore.");
+            SetProjectionStatus("There is no undone message to restore.");
             return;
         }
 
@@ -353,12 +382,12 @@ public sealed partial class NewChatPage : UserControl, IDisposable
             _messages.Add(message);
             _redoMessages.Pop();
             RefreshMessages();
-            _scene.SetStatus("Restored the latest undone message.");
+            SetProjectionStatus("Restored the latest undone message.");
             ConversationStateChanged?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception exception) when (exception is InvalidOperationException or NotSupportedException or IOException)
         {
-            _scene.SetStatus("The message could not be restored: " + exception.Message);
+            SetProjectionStatus("The message could not be restored: " + exception.Message);
         }
     }
 
@@ -367,7 +396,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         if (!await EnsureConversationMayActAsync("chat.compact-context")) return;
         if (_selectedModel is null)
         {
-            _scene.SetStatus("Choose an available model before compacting context.");
+            SetProjectionStatus("Choose an available model before compacting context.");
             return;
         }
 
@@ -377,11 +406,11 @@ public sealed partial class NewChatPage : UserControl, IDisposable
             .ToArray();
         if (compactable.Length < 4)
         {
-            _scene.SetStatus("There is not enough older context to compact yet.");
+            SetProjectionStatus("There is not enough older context to compact yet.");
             return;
         }
 
-        _scene.SetStatus("Compacting older context…");
+        SetProjectionStatus("Compacting older context…");
         var transcript = string.Join("\n\n", compactable.Select(message => $"{message.Role}: {message.Content}"));
         if (transcript.Length > 180_000) transcript = transcript[^180_000..];
         string summary;
@@ -397,7 +426,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         }
         catch (Exception exception) when (exception is HttpRequestException or InvalidOperationException or IOException)
         {
-            _scene.SetStatus("Context compaction failed: " + exception.Message);
+            SetProjectionStatus("Context compaction failed: " + exception.Message);
             return;
         }
 
@@ -421,7 +450,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
             if (compactedIds.Contains(_messages[index].Id)) _messages[index] = _messages[index] with { IsCompacted = true };
         _redoMessages.Clear();
         RefreshMessages();
-        _scene.SetStatus($"Compacted {compactable.Length} older messages into a durable summary.");
+        SetProjectionStatus($"Compacted {compactable.Length} older messages into a durable summary.");
         await RefreshContextEntriesAsync();
     }
 
@@ -494,26 +523,26 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         {
             case AgentDefinition agent:
                 _activeAgent = agent;
-                _scene.SetStatus($"{agent.Name} selected.");
+                SetProjectionStatus($"{agent.Name} selected.");
                 break;
             case CapabilityDefinition capability:
                 AttachCapability(capability);
                 break;
             case PromptDefinition instruction:
                 if (_activeInstructions.All(item => item.Id != instruction.Id)) _activeInstructions.Add(instruction);
-                _scene.SetStatus($"{instruction.Name} instruction added.");
+                SetProjectionStatus($"{instruction.Name} instruction added.");
                 break;
             case ChatActionMode actionMode:
                 _chatActionModeOverride = actionMode;
-                _scene.SetStatus($"{ActionModeLabel(actionMode)} for this chat.");
+                SetProjectionStatus($"{ActionModeLabel(actionMode)} for this chat.");
                 break;
             case GenerativeUiResponseMode responseMode:
                 _chatGenerativeUiResponseModeOverride = responseMode;
-                _scene.SetStatus($"{VisualResponseModeLabel(responseMode)} for this chat.");
+                SetProjectionStatus($"{VisualResponseModeLabel(responseMode)} for this chat.");
                 break;
             case ModeDefinition app:
                 _taskAttachments.AttachApp(app);
-                _scene.SetStatus($"{app.Name} attached to this chat.");
+                SetProjectionStatus($"{app.Name} attached to this chat.");
                 RefreshAttachmentStatus();
                 break;
         }
@@ -527,7 +556,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         if (_taskAttachments.IsCapabilityAttached(capability.Id))
         {
             _taskAttachments.RemoveCapability(capability.Id);
-            _scene.SetStatus($"{capability.Name} removed from this chat context.");
+            SetProjectionStatus($"{capability.Name} removed from this chat context.");
             RefreshAttachmentStatus();
             return;
         }
@@ -662,12 +691,12 @@ public sealed partial class NewChatPage : UserControl, IDisposable
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                _scene.SetStatus($"Could not attach {Path.GetFileName(path)}: {exception.Message}");
+                SetProjectionStatus($"Could not attach {Path.GetFileName(path)}: {exception.Message}");
             }
         }
         if (added > 0)
         {
-            _scene.SetStatus($"{added} file{(added == 1 ? "" : "s")} attached to this chat.");
+            SetProjectionStatus($"{added} file{(added == 1 ? "" : "s")} attached to this chat.");
             RefreshAttachmentStatus();
         }
     }
@@ -703,7 +732,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
     {
         _conversation = _conversation with { IsPinned = !_conversation.IsPinned, UpdatedAt = DateTimeOffset.UtcNow };
         await _conversations.UpsertConversationAsync(_conversation, CancellationToken.None);
-        _scene.SetStatus(_conversation.IsPinned ? "Chat pinned." : "Chat unpinned.");
+        SetProjectionStatus(_conversation.IsPinned ? "Chat pinned." : "Chat unpinned.");
     }
 
     public async Task ArchiveAsync()
@@ -760,7 +789,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         if (!_conversation.IsTemporary)
             foreach (var message in _messages)
                 await _conversations.AddMessageAsync(message, CancellationToken.None);
-        _scene.SetStatus(_conversation.IsTemporary
+        SetProjectionStatus(_conversation.IsTemporary
             ? "Temporary chat is on. New messages remain only in this session."
             : "Temporary chat is off. This conversation is saved locally.");
         ConversationStateChanged?.Invoke(this, EventArgs.Empty);
@@ -786,7 +815,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         _safetyLocked = snapshot.State == ConversationSafetyState.Locked;
         _scene.SetSafetyLocked(_safetyLocked);
         if (_safetyLocked)
-            _scene.SetStatus("This conversation is safety-locked after three confirmed safety flags. Sending, editing, branching and regeneration are disabled; deletion remains available.");
+            SetProjectionStatus("This conversation is safety-locked after three confirmed safety flags. Sending, editing, branching and regeneration are disabled; deletion remains available.");
     }
 
     private void WireScene()
@@ -842,11 +871,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
 
     private void OnStopRequested(object? sender, EventArgs e)
     {
-        var cancellation = _sendCancellation;
-        if (cancellation is null || cancellation.IsCancellationRequested) return;
-
-        _scene.SetStatus("Stopping response...");
-        cancellation.Cancel();
+        TryStopResponse();
     }
 
     private void OnInputSubmitted(Input input)
@@ -914,7 +939,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         {
             _pendingInstruction = text;
             _pendingInstructionPreservesDraft = true;
-            _scene.SetStatus("Stopping the current response and applying the recovery…");
+            SetProjectionStatus("Stopping the current response and applying the recovery…");
             _sendCancellation?.Cancel();
             return;
         }
@@ -924,7 +949,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         {
             _pendingInstruction = text;
             _pendingInstructionPreservesDraft = true;
-            _scene.SetStatus("Connecting to the selected local model…");
+            SetProjectionStatus("Connecting to the selected local model…");
             return;
         }
         SetDraft(text);
@@ -941,7 +966,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         {
             _pendingInstruction = instruction;
             _pendingInstructionPreservesDraft = false;
-            _scene.SetStatus("Connecting to the selected local modelâ€¦");
+            SetProjectionStatus("Connecting to the selected local model…");
             return;
         }
 
@@ -949,7 +974,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         {
             if (!_dual.CanRun)
             {
-                _scene.SetStatus(_dual.SecondModelKey is null
+                SetProjectionStatus(_dual.SecondModelKey is null
                     ? "Choose Model B beside the composer before sending in dual mode."
                     : "A dual comparison is already running.");
                 return;
@@ -1066,12 +1091,12 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         _scene.SetDualActive(activating);
         if (!activating)
         {
-            _scene.SetStatus("Dual-model comparison off.");
+            SetProjectionStatus("Dual-model comparison off.");
             return;
         }
         if (_dual.SecondModelKey is not null)
         {
-            _scene.SetStatus($"Dual-model comparison on — Model A {_selectedModel?.Name ?? "?"} vs {_dual.SecondModelKey}. Session only; nothing is saved.");
+            SetProjectionStatus($"Dual-model comparison on — Model A {_selectedModel?.Name ?? "?"} vs {_dual.SecondModelKey}. Session only; nothing is saved.");
             return;
         }
         await TryAutoSelectDualSecondModelAsync();
@@ -1091,16 +1116,16 @@ public sealed partial class NewChatPage : UserControl, IDisposable
                 ?? models.FirstOrDefault()?.Name;
             if (candidate is null)
             {
-                _scene.SetStatus("Dual mode is on, but no local model is available for Model B yet.");
+                SetProjectionStatus("Dual mode is on, but no local model is available for Model B yet.");
                 return;
             }
             controller.SetSecondModel(candidate);
             _scene.SetDualSecondModel(candidate);
-            _scene.SetStatus($"Dual-model comparison on — Model A {primary ?? "primary"} vs {candidate}. Session only; nothing is saved.");
+            SetProjectionStatus($"Dual-model comparison on — Model A {primary ?? "primary"} vs {candidate}. Session only; nothing is saved.");
         }
         catch (Exception exception) when (exception is HttpRequestException or IOException or InvalidOperationException)
         {
-            _scene.SetStatus("Dual mode is on, but installed models could not be listed: " + exception.Message);
+            SetProjectionStatus("Dual mode is on, but installed models could not be listed: " + exception.Message);
         }
     }
 
@@ -1116,14 +1141,14 @@ public sealed partial class NewChatPage : UserControl, IDisposable
             if (keys.Length == 0) keys = models.Select(model => model.Name).ToArray();
             if (keys.Length == 0)
             {
-                _scene.SetStatus("No local models are installed for a dual comparison.");
+                SetProjectionStatus("No local models are installed for a dual comparison.");
                 return;
             }
             _scene.ShowDualModelChoices(keys);
         }
         catch (Exception exception) when (exception is HttpRequestException or IOException or InvalidOperationException)
         {
-            _scene.SetStatus("Installed models could not be listed: " + exception.Message);
+            SetProjectionStatus("Installed models could not be listed: " + exception.Message);
         }
     }
 
@@ -1132,7 +1157,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         if (_dual is null || string.IsNullOrWhiteSpace(modelKey)) return;
         _dual.SetSecondModel(modelKey);
         _scene.SetDualSecondModel(modelKey);
-        _scene.SetStatus($"Model B set to {modelKey}.");
+        SetProjectionStatus($"Model B set to {modelKey}.");
     }
 
     /// <summary>
@@ -1292,7 +1317,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
                 break;
             }
             case ChatStreamEventKind.PreflightFailed:
-                _scene.SetStatus(streamEvent.PreflightResult is { Missing.Count: > 0 } preflight
+                SetProjectionStatus(streamEvent.PreflightResult is { Missing.Count: > 0 } preflight
                     ? string.Join(" ", preflight.Missing.Select(item => item.Reason))
                     : "The selected model cannot complete this request.");
                 break;
@@ -1316,6 +1341,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
             _lastReportedHasStarted = HasStarted;
             ConversationStateChanged?.Invoke(this, EventArgs.Empty);
         }
+        PublishProjectionState();
         ScrollToEndIfFollowing(followLatest);
     }
 
@@ -1323,6 +1349,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
     {
         _scene.UpdateMessage(BuildSceneMessage(message));
         if (message.Role == MessageRole.Assistant) RefreshGeneratedContent(message);
+        PublishProjectionState();
     }
 
     private bool IsFollowingLatest() =>
@@ -1657,7 +1684,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
         {
-            _scene.SetStatus(exception.Message);
+            SetProjectionStatus(exception.Message);
         }
     }
 
@@ -1698,7 +1725,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
         {
-            _scene.SetStatus(exception.Message);
+            SetProjectionStatus(exception.Message);
         }
     }
 
@@ -1741,7 +1768,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
             .ToArray();
         if (choices.Length == 0)
         {
-            _scene.SetStatus("No other saved chats yet.");
+            SetProjectionStatus("No other saved chats yet.");
             return;
         }
         _scene.ShowMessageChoiceMenu(sourceMessage.Id, "Choose an existing chat", choices);
@@ -1766,7 +1793,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         }
         catch (Exception exception) when (exception is InvalidOperationException or NotSupportedException or IOException)
         {
-            _scene.SetStatus(exception.Message);
+            SetProjectionStatus(exception.Message);
         }
     }
 
@@ -1797,7 +1824,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         _pendingInstruction = null;
         _pendingInstructionPreservesDraft = false;
         ClearGeneratedSurfaces();
-        _scene.SetStatus(null);
+        SetProjectionStatus(null);
         RefreshAttachmentStatus();
         RefreshResponseControls();
         _ = RefreshContextEntriesAsync();
@@ -1826,7 +1853,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
     {
         var owner = _availableApps.FirstOrDefault(app => app.Key.Equals(capability.OwnerAppKey, StringComparison.OrdinalIgnoreCase));
         _taskAttachments.AttachCapability(capability, owner);
-        _scene.SetStatus($"{capability.Name} attached as chat relevance; permissions are unchanged.");
+        SetProjectionStatus($"{capability.Name} attached as chat relevance; permissions are unchanged.");
         RefreshAttachmentStatus();
     }
 
@@ -1849,7 +1876,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
             if (_conversation.Id == conversationId)
-                _scene.SetStatus("Context entries could not be loaded: " + exception.Message);
+                SetProjectionStatus("Context entries could not be loaded: " + exception.Message);
             return;
         }
         if (_conversation.Id != conversationId || _disposed) return;
@@ -1877,7 +1904,7 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         catch (Exception exception) when (exception is IOException or InvalidOperationException)
         {
             if (_conversation.Id == conversationId)
-                _scene.SetStatus("That context entry could not be removed: " + exception.Message);
+                SetProjectionStatus("That context entry could not be removed: " + exception.Message);
             return;
         }
         if (_conversation.Id != conversationId || _disposed) return;
@@ -1885,13 +1912,13 @@ public sealed partial class NewChatPage : UserControl, IDisposable
         {
             var remaining = await _conversations.GetContextEntriesAsync(conversationId, CancellationToken.None);
             if (remaining.Any(entry => entry.Id == entryId && entry.Kind == ContextEntryKind.CompactSummary))
-                _scene.SetStatus("Compact summaries cannot be removed individually.");
+                SetProjectionStatus("Compact summaries cannot be removed individually.");
             else
-                _scene.SetStatus("That context entry is no longer available.");
+                SetProjectionStatus("That context entry is no longer available.");
             return;
         }
         await RefreshContextEntriesAsync();
-        _scene.SetStatus("Context entry removed from this conversation.");
+        SetProjectionStatus("Context entry removed from this conversation.");
     }
 
     /// <summary>
@@ -1976,7 +2003,57 @@ public sealed partial class NewChatPage : UserControl, IDisposable
     }
 
     private async Task SetStatusAsync(string status) =>
-        await Dispatcher.UIThread.InvokeAsync(() => _scene.SetStatus(string.IsNullOrWhiteSpace(status) ? null : status));
+        await Dispatcher.UIThread.InvokeAsync(() => SetProjectionStatus(string.IsNullOrWhiteSpace(status) ? null : status));
+
+    private void SetProjectionStatus(string? status)
+    {
+        _projectionStatus = string.IsNullOrWhiteSpace(status) ? null : status;
+        _scene.SetStatus(_projectionStatus);
+        PublishProjectionState();
+    }
+
+    private void PublishProjectionState()
+    {
+        // Rebuilding the projection snapshots every message on each stream delta.
+        // Mark dirty and defer that work until a consumer observes the state.
+        _projectionDirty = true;
+        if (ProjectionStateChanged is null) return;
+        RebuildProjectionState();
+        ProjectionStateChanged?.Invoke(this, new ChatProjectionStateChangedEventArgs(_projectionState));
+    }
+
+    private void RebuildProjectionState()
+    {
+        _projectionDirty = false;
+        var messages = _messages.Select(message => new ChatProjectionMessage(
+            message.Id,
+            message.Role,
+            message.Content,
+            message.AgentName,
+            message.ModelName,
+            _streamingMessages.Contains(message.Id),
+            ReadToolActivities(message)
+                .Select(activity => new ChatProjectionToolActivity(
+                    activity.Id,
+                    activity.Title,
+                    activity.Detail,
+                    activity.Succeeded,
+                    activity.Duration,
+                    activity.Timestamp,
+                    activity.LinesAdded,
+                    activity.LinesRemoved))
+                .ToImmutableArray(),
+            message.CreatedAt)).ToArray();
+        _projectionState = ChatProjectionState.Create(
+            _conversation.Id,
+            _conversation.Title,
+            _modeDefinition?.Name ?? (_isTaskMode ? "Tasks" : "Chat"),
+            _selectedModel?.Name,
+            ActiveAgentName,
+            _isSending,
+            _projectionStatus,
+            messages);
+    }
 
     private static string ActionModeLabel(ChatActionMode mode) => mode switch
     {

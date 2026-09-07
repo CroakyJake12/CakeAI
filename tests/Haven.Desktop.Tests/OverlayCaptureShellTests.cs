@@ -7,6 +7,6 @@ public sealed class OverlayCaptureShellTests
     {
         using var scene = new OverlayShellHavenScene();
         Assert.Equal("Overlay.Capture", scene.CaptureButton.Name);
-        Assert.Equal("Capture", scene.CaptureButton.Content);
+        Assert.Equal("AI Select", scene.CaptureButton.Content);
     }
 }

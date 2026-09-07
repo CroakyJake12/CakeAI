@@ -1,5 +1,7 @@
 using Haven.Core;
 using Haven.Desktop.Overlay;
+using Haven.Desktop.Views.Pages.Imagine;
+using Haven.UI;
 using Haven.UI.Components;
 
 namespace Haven.Desktop.Tests;
@@ -95,6 +97,108 @@ public sealed class OverlayShellHavenSceneTests
 
         Assert.Equal("Expand", scene.CollapseButton.Content);
         Assert.Equal(ButtonVariant.Secondary, scene.CollapseButton.Variant);
+    }
+
+    [Fact]
+    public void Scene_projects_compact_app_identity_and_back_navigation()
+    {
+        var now = new DateTimeOffset(2026, 8, 17, 16, 0, 0, TimeSpan.Zero);
+        var sessionId = Guid.NewGuid();
+        var conversationId = Guid.NewGuid();
+        var session = new OverlaySessionState(
+            sessionId, "chat", "Chat", conversationId, false, true,
+            OverlaySurfaceGeometry.Default, null, now, now, "Browser");
+
+        using var scene = new OverlayShellHavenScene();
+        scene.ApplySnapshot(new OverlayWorkspaceSnapshot(sessionId, [session]), sessionId);
+
+        Assert.Equal("Chat", scene.AppHostTitle.Content);
+        Assert.DoesNotContain(conversationId.ToString("N"), scene.AppHostIdentity.Content?.ToString());
+        Assert.Equal(HavenVisibility.Collapsed, scene.BackButton.GetValue(HavenProperties.Visibility));
+
+        scene.SetBackNavigation(true, "Go routing");
+
+        Assert.Equal(HavenVisibility.Visible, scene.BackButton.GetValue(HavenProperties.Visibility));
+        Assert.Equal("Back to Go routing", scene.BackButton.Accessibility.AccessibleName);
+    }
+
+    [Fact]
+    public void Compact_host_restores_home_translate_and_vision_routes_in_order()
+    {
+        using var scene = new OverlayShellHavenScene();
+        var translate = new OverlayCompactAppRoute("translate", "Translate", "Translate");
+        var vision = new OverlayCompactAppRoute("vision", "Vision", "Vision");
+
+        Assert.True(scene.NavigateTo(translate));
+        Assert.Equal("Translate", scene.CurrentRoute.Title);
+        Assert.Equal(HavenVisibility.Visible, scene.AppHostPanel.GetValue(HavenProperties.Visibility));
+
+        Assert.True(scene.NavigateTo(vision));
+        Assert.Equal("Vision", scene.CurrentRoute.Title);
+
+        Assert.True(scene.NavigateBack());
+        Assert.Equal("Translate", scene.CurrentRoute.Title);
+        Assert.Equal("Back to Overlay home", scene.BackButton.Accessibility.AccessibleName);
+
+        Assert.True(scene.NavigateBack());
+        Assert.True(scene.CurrentRoute.IsHome);
+        Assert.Equal(HavenVisibility.Collapsed, scene.AppHostPanel.GetValue(HavenProperties.Visibility));
+        Assert.Equal(HavenVisibility.Collapsed, scene.BackButton.GetValue(HavenProperties.Visibility));
+    }
+
+    [Fact]
+    public void Header_uses_overlay_accent_surface_tokens_and_floating_shadow()
+    {
+        using var scene = new OverlayShellHavenScene();
+        var header = scene.Root.DescendantsAndSelf().Single(element => element.Name == "Overlay.Header");
+
+        Assert.Equal("Overlay", header.GetValue(HavenProperties.Background));
+        Assert.Equal("AccentSecondary", header.GetValue(HavenProperties.BorderColor));
+        Assert.Equal("Floating", header.GetValue(HavenProperties.Shadow));
+        Assert.Equal("AccentSecondaryGlow", header.GetValue(HavenProperties.Glow));
+        Assert.Equal(HavenLength.Px(1), header.GetValue(HavenProperties.BorderWidth));
+    }
+
+    [Fact]
+    public void Real_capture_preview_starts_in_select_mode_and_disables_apply_until_drag()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "haven-overlay-preview-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var source = Path.Combine(root, "capture.jpg");
+        File.WriteAllBytes(source, [1, 2, 3]);
+        try
+        {
+            using var scene = new OverlayShellHavenScene();
+            scene.ShowRegionDraft(source, "Captured real screen content.");
+
+            Assert.Equal(VisionInteractionMode.SelectRegion, scene.RegionPreview.Mode);
+            Assert.Equal(HavenVisibility.Visible, scene.RegionPreviewPanel.GetValue(HavenProperties.Visibility));
+            Assert.False(scene.ApplySelectionButton.GetValue(HavenProperties.Enabled));
+            Assert.Contains("Captured real", scene.RegionStatus.Content);
+
+            scene.ClearRegionDraft();
+
+            Assert.Equal(HavenVisibility.Collapsed, scene.RegionPreviewPanel.GetValue(HavenProperties.Visibility));
+            Assert.False(scene.ApplySelectionButton.GetValue(HavenProperties.Enabled));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
+    public void Capture_error_is_visible_without_fabricating_a_preview()
+    {
+        using var scene = new OverlayShellHavenScene();
+
+        scene.SetRegionStatus("Screen capture denied by Windows.");
+
+        Assert.Equal(HavenVisibility.Visible, scene.RegionPreviewPanel.GetValue(HavenProperties.Visibility));
+        Assert.Equal(HavenVisibility.Visible, scene.ContextPanel.GetValue(HavenProperties.Visibility));
+        Assert.Equal("Screen capture denied by Windows.", scene.RegionStatus.Content);
+        Assert.Null(scene.RegionPreview.Source);
+        Assert.False(scene.ApplySelectionButton.GetValue(HavenProperties.Enabled));
     }
 
     private static OverlaySessionState Session(

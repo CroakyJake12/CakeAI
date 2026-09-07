@@ -1,5 +1,6 @@
 #if !ANDROID
 using Haven.Core;
+using Haven.Desktop.Views.Pages.Imagine;
 using Haven.UI;
 using Haven.UI.Components;
 using Container = Haven.UI.Components.Container;
@@ -47,10 +48,17 @@ internal sealed class OverlayShellHavenScene : IDisposable
         {
             Name = "Overlay.Header",
             Layout = HavenLayout.Grid,
-            Columns = "Auto 1fr Auto Auto Auto Auto"
+            Columns = "Auto 1fr Auto Auto Auto Auto Auto"
         };
         Set(header, HavenProperties.Width, HavenLength.Percent(100));
         Set(header, HavenProperties.Gap, HavenLength.Px(6));
+        Set(header, HavenProperties.Padding, HavenThickness.Parse("8px 10px"));
+        Set(header, HavenProperties.Background, "Overlay");
+        Set(header, HavenProperties.BorderColor, "AccentSecondary");
+        Set(header, HavenProperties.BorderWidth, HavenLength.Px(1));
+        Set(header, HavenProperties.Radius, HavenCornerRadius.Uniform(HavenLength.Px(18)));
+        Set(header, HavenProperties.Shadow, "Floating");
+        Set(header, HavenProperties.Glow, "AccentSecondaryGlow");
         header.DragDelta += delta => DragDelta?.Invoke(delta);
 
         ModeButton = Action("Overlay.Mode", "Go", ButtonVariant.Tertiary);
@@ -65,15 +73,20 @@ internal sealed class OverlayShellHavenScene : IDisposable
         identity.Add(SourceText);
         header.Add(identity);
 
-        CaptureButton = Action("Overlay.Capture", "Capture", ButtonVariant.Ghost);
+        BackButton = Action("Overlay.Back", "Back", ButtonVariant.Ghost);
+        Set(BackButton, HavenProperties.Column, 2);
+        Set(BackButton, HavenProperties.Visibility, HavenVisibility.Collapsed);
+        header.Add(BackButton);
+
+        CaptureButton = Action("Overlay.Capture", "AI Select", ButtonVariant.Secondary);
         NewChatButton = Action("Overlay.NewChat", "New chat", ButtonVariant.Ghost);
         PinButton = Action("Overlay.Pin", "Pin", ButtonVariant.Ghost);
         CollapseButton = Action("Overlay.Collapse", "Collapse", ButtonVariant.Ghost);
         CloseButton = Action("Overlay.Close", "Close", ButtonVariant.Ghost);
-        Set(CaptureButton, HavenProperties.Column, 2);
-        Set(PinButton, HavenProperties.Column, 3);
-        Set(CollapseButton, HavenProperties.Column, 4);
-        Set(CloseButton, HavenProperties.Column, 5);
+        Set(CaptureButton, HavenProperties.Column, 3);
+        Set(PinButton, HavenProperties.Column, 4);
+        Set(CollapseButton, HavenProperties.Column, 5);
+        Set(CloseButton, HavenProperties.Column, 6);
         Set(NewChatButton, HavenProperties.Visibility, HavenVisibility.Collapsed);
         header.Add(CaptureButton);
         header.Add(PinButton);
@@ -82,8 +95,22 @@ internal sealed class OverlayShellHavenScene : IDisposable
         header.Add(NewChatButton);
         ExpandedPanel.Add(header);
 
-        Heading = new HavenText("How can I help?") { Name = "Overlay.Heading", Level = TextLevel.H1 };
+        Heading = new HavenText("Ask Haven about your Screen") { Name = "Overlay.Heading", Level = TextLevel.H2 };
         ExpandedPanel.Add(Heading);
+
+        AppHostPanel = new Container { Name = "Overlay.AppHost", Layout = HavenLayout.Vertical };
+        Set(AppHostPanel, HavenProperties.Width, HavenLength.Percent(100));
+        Set(AppHostPanel, HavenProperties.Padding, HavenThickness.Parse("10px 12px"));
+        Set(AppHostPanel, HavenProperties.Background, "SurfaceRaised");
+        Set(AppHostPanel, HavenProperties.BorderColor, "Border");
+        Set(AppHostPanel, HavenProperties.BorderWidth, HavenLength.Px(1));
+        Set(AppHostPanel, HavenProperties.Radius, HavenCornerRadius.Uniform(HavenLength.Px(14)));
+        AppHostTitle = new HavenText(string.Empty) { Name = "Overlay.AppHost.Title", Level = TextLevel.Caption };
+        AppHostIdentity = Secondary(string.Empty, "Overlay.AppHost.Identity");
+        AppHostPanel.Add(AppHostTitle);
+        AppHostPanel.Add(AppHostIdentity);
+        Set(AppHostPanel, HavenProperties.Visibility, HavenVisibility.Collapsed);
+        ExpandedPanel.Add(AppHostPanel);
 
         SuggestionsPanel = new Container
         {
@@ -128,6 +155,36 @@ internal sealed class OverlayShellHavenScene : IDisposable
         Set(ContextPanel, HavenProperties.Visibility, HavenVisibility.Collapsed);
         ExpandedPanel.Add(ContextPanel);
 
+        RegionPreviewPanel = new Container { Name = "Overlay.RegionPreview", Layout = HavenLayout.Vertical };
+        Set(RegionPreviewPanel, HavenProperties.Width, HavenLength.Percent(100));
+        Set(RegionPreviewPanel, HavenProperties.Gap, HavenLength.Px(6));
+        Set(RegionPreviewPanel, HavenProperties.Padding, HavenThickness.Parse("8px"));
+        Set(RegionPreviewPanel, HavenProperties.Background, "SurfaceRaised");
+        Set(RegionPreviewPanel, HavenProperties.BorderColor, "Border");
+        Set(RegionPreviewPanel, HavenProperties.BorderWidth, HavenLength.Px(1));
+        Set(RegionPreviewPanel, HavenProperties.Radius, HavenCornerRadius.Uniform(HavenLength.Px(14)));
+        RegionPreview = new VisionPreviewElement { Name = "Overlay.RegionPreview.Image" };
+        Set(RegionPreview, HavenProperties.Width, HavenLength.Percent(100));
+        Set(RegionPreview, HavenProperties.Height, HavenLength.Px(180));
+        RegionPreview.SetMode(VisionInteractionMode.SelectRegion);
+        RegionStatus = Secondary("Choose a region from the captured frame.", "Overlay.RegionPreview.Status");
+        RegionPreviewPanel.Add(RegionPreview);
+        RegionPreviewPanel.Add(RegionStatus);
+        var regionActions = new Container { Name = "Overlay.RegionPreview.Actions", Layout = HavenLayout.Wrap };
+        Set(regionActions, HavenProperties.Width, HavenLength.Percent(100));
+        Set(regionActions, HavenProperties.Gap, HavenLength.Px(6));
+        ApplySelectionButton = Action("Overlay.RegionPreview.Apply", "Apply selection", ButtonVariant.Primary);
+        ReplaceCaptureButton = Action("Overlay.RegionPreview.Replace", "Replace capture", ButtonVariant.Secondary);
+        ClearSelectionButton = Action("Overlay.RegionPreview.Clear", "Clear selection", ButtonVariant.Ghost);
+        Set(ApplySelectionButton, HavenProperties.Enabled, false);
+        regionActions.Add(ApplySelectionButton);
+        regionActions.Add(ReplaceCaptureButton);
+        regionActions.Add(ClearSelectionButton);
+        RegionPreviewPanel.Add(regionActions);
+        Set(RegionPreviewPanel, HavenProperties.Visibility, HavenVisibility.Collapsed);
+        ExpandedPanel.Add(RegionPreviewPanel);
+        RegionPreview.RegionChanged += (_, _) => UpdateRegionSelectionState();
+
         Actions = new DynamicUIRuntime { Name = "Overlay.Actions", Layout = HavenLayout.Horizontal };
         Set(Actions, HavenProperties.Width, HavenLength.Percent(100));
         Set(Actions, HavenProperties.Gap, HavenLength.Px(6));
@@ -155,7 +212,7 @@ internal sealed class OverlayShellHavenScene : IDisposable
         };
         Set(ComposerInput, HavenProperties.Column, 1);
         Set(ComposerInput, HavenProperties.Width, HavenLength.Percent(100));
-        SendButton = Action("Overlay.Composer.Send", "Ã¢â€ â€˜", ButtonVariant.Primary);
+        SendButton = Action("Overlay.Composer.Send", "→", ButtonVariant.Primary);
         Set(SendButton, HavenProperties.Column, 2);
         composerRow.Add(AddButton);
         composerRow.Add(ComposerInput);
@@ -165,7 +222,11 @@ internal sealed class OverlayShellHavenScene : IDisposable
         _dynamicUi = new DynamicUI(Root, HavenDynamicUITemplateCatalog.FromAssembly(typeof(OverlayShellHavenScene).Assembly));
 
         CollapsedPromptButton.Invoked += (_, _) => CollapseToggleRequested?.Invoke(this, EventArgs.Empty);
+        BackButton.Invoked += (_, _) => BackRequested?.Invoke(this, EventArgs.Empty);
         CaptureButton.Invoked += (_, _) => CaptureRequested?.Invoke(this, EventArgs.Empty);
+        ApplySelectionButton.Invoked += (_, _) => ApplySelectionRequested?.Invoke(this, EventArgs.Empty);
+        ReplaceCaptureButton.Invoked += (_, _) => ReplaceCaptureRequested?.Invoke(this, EventArgs.Empty);
+        ClearSelectionButton.Invoked += (_, _) => ClearSelectionRequested?.Invoke(this, EventArgs.Empty);
         NewChatButton.Invoked += (_, _) => NewChatRequested?.Invoke(this, EventArgs.Empty);
         PinButton.Invoked += (_, _) => PinToggleRequested?.Invoke(this, EventArgs.Empty);
         CollapseButton.Invoked += (_, _) => CollapseToggleRequested?.Invoke(this, EventArgs.Empty);
@@ -173,10 +234,15 @@ internal sealed class OverlayShellHavenScene : IDisposable
         AddButton.Invoked += (_, _) => AddRequested?.Invoke(this, EventArgs.Empty);
         SendButton.Invoked += (_, _) => SubmitComposer();
 
+        AppHost = new OverlayCompactAppHost();
         SetCollapsed(false);
     }
 
     public event EventHandler? CaptureRequested;
+    public event EventHandler? ApplySelectionRequested;
+    public event EventHandler? ReplaceCaptureRequested;
+    public event EventHandler? ClearSelectionRequested;
+    public event EventHandler? BackRequested;
     public event EventHandler? NewChatRequested;
     public event EventHandler? PinToggleRequested;
     public event EventHandler? CollapseToggleRequested;
@@ -191,9 +257,13 @@ internal sealed class OverlayShellHavenScene : IDisposable
     public Container ExpandedPanel { get; }
     public HavenButton CollapsedPromptButton { get; }
     public HavenButton ModeButton { get; }
+    public HavenButton BackButton { get; }
     public HavenText Heading { get; }
     public HavenText TitleText { get; }
     public HavenText SourceText { get; }
+    public Container AppHostPanel { get; }
+    public HavenText AppHostTitle { get; }
+    public HavenText AppHostIdentity { get; }
     public HavenButton CaptureButton { get; }
     public HavenButton NewChatButton { get; }
     public HavenButton PinButton { get; }
@@ -204,10 +274,19 @@ internal sealed class OverlayShellHavenScene : IDisposable
     public Container ContextPanel { get; }
     public HavenText ContextSummary { get; }
     public HavenText PermissionText { get; }
+    public Container RegionPreviewPanel { get; }
+    public VisionPreviewElement RegionPreview { get; }
+    public HavenText RegionStatus { get; }
+    public HavenButton ApplySelectionButton { get; }
+    public HavenButton ReplaceCaptureButton { get; }
+    public HavenButton ClearSelectionButton { get; }
+    public HavenRect? SelectedRegion => RegionPreview.SelectedRegion;
     public DynamicUIRuntime Actions { get; }
     public HavenButton AddButton { get; }
     public Input ComposerInput { get; }
     public HavenButton SendButton { get; }
+    public OverlayCompactAppHost AppHost { get; }
+    public OverlayCompactAppRoute CurrentRoute => AppHost.CurrentRoute;
 
     public void ApplySnapshot(OverlayWorkspaceSnapshot snapshot, Guid windowSessionId)
     {
@@ -216,16 +295,54 @@ internal sealed class OverlayShellHavenScene : IDisposable
 
         TitleText.Content = current.Title;
         SourceText.Content = SourceLabel(current);
-        ModeButton.Content = current.AppKey.Equals("chat", StringComparison.OrdinalIgnoreCase) ? "Chat" : "Go";
+        var route = OverlayCompactAppHost.ForSession(current);
+        if (AppHost.CurrentRoute.IsHome && !AppHost.CanNavigateBack)
+            AppHost.InitializeFromSession(route);
+        ProjectRoute(AppHost.CurrentRoute);
         PinButton.Content = current.IsPinned ? "Unpin" : "Pin";
         PinButton.Variant = current.IsPinned ? ButtonVariant.Primary : ButtonVariant.Ghost;
         CollapseButton.Content = current.IsCollapsed ? "Expand" : "Collapse";
         CollapseButton.Variant = current.IsCollapsed ? ButtonVariant.Secondary : ButtonVariant.Ghost;
         ContextSummary.Content = current.Context is null ? "No selected context." : ContextLabel(current.Context);
         PermissionText.Content = current.Context is null ? "Capture inactive" : PermissionLabel(current.Context.Provenance);
-        Set(ContextPanel, HavenProperties.Visibility, current.Context is null ? HavenVisibility.Collapsed : HavenVisibility.Visible);
+        Set(ContextPanel, HavenProperties.Visibility, current.Context is null && RegionPreviewPanel.GetValue(HavenProperties.Visibility) != HavenVisibility.Visible
+            ? HavenVisibility.Collapsed
+            : HavenVisibility.Visible);
         RebuildSessions(snapshot, windowSessionId);
         SetCollapsed(current.IsCollapsed);
+    }
+
+    public void SetBackNavigation(bool canGoBack, string? destination = null)
+    {
+        Set(BackButton, HavenProperties.Visibility, canGoBack ? HavenVisibility.Visible : HavenVisibility.Collapsed);
+        BackButton.Accessibility.AccessibleName = string.IsNullOrWhiteSpace(destination)
+            ? "Back"
+            : "Back to " + destination;
+    }
+
+    public bool NavigateTo(OverlayCompactAppRoute route)
+    {
+        if (!AppHost.NavigateTo(route)) return false;
+        ProjectRoute(AppHost.CurrentRoute);
+        SetBackNavigation(AppHost.CanNavigateBack, AppHost.History[^1].Title);
+        return true;
+    }
+
+    public bool NavigateHome()
+    {
+        if (!AppHost.NavigateHome()) return false;
+        ProjectRoute(AppHost.CurrentRoute);
+        SetBackNavigation(AppHost.CanNavigateBack, AppHost.History[^1].Title);
+        return true;
+    }
+
+    public bool NavigateBack()
+    {
+        if (!AppHost.TryNavigateBack()) return false;
+        ProjectRoute(AppHost.CurrentRoute);
+        SetBackNavigation(AppHost.CanNavigateBack,
+            AppHost.CanNavigateBack ? AppHost.History[^1].Title : null);
+        return true;
     }
 
     public void SetSuggestions(IReadOnlyList<string> labels)
@@ -247,6 +364,51 @@ internal sealed class OverlayShellHavenScene : IDisposable
         if (string.IsNullOrWhiteSpace(text)) return;
         ComposerInput.Text = string.Empty;
         SubmitRequested?.Invoke(this, text);
+    }
+
+    public void ShowRegionDraft(string sourcePath, string status)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath)) throw new ArgumentException("A captured source path is required.", nameof(sourcePath));
+        if (!File.Exists(sourcePath)) throw new FileNotFoundException("The captured source image is unavailable.", sourcePath);
+        RegionPreview.Source = sourcePath;
+        RegionPreview.SetMode(VisionInteractionMode.SelectRegion);
+        Set(RegionPreviewPanel, HavenProperties.Visibility, HavenVisibility.Visible);
+        Set(ContextPanel, HavenProperties.Visibility, HavenVisibility.Visible);
+        UpdateRegionSelectionState();
+        RegionStatus.Content = string.IsNullOrWhiteSpace(status)
+            ? "Drag over the captured frame to choose a region."
+            : status;
+    }
+
+    public void SetRegionStatus(string status)
+    {
+        Set(RegionPreviewPanel, HavenProperties.Visibility, HavenVisibility.Visible);
+        Set(ContextPanel, HavenProperties.Visibility, HavenVisibility.Visible);
+        UpdateRegionSelectionState();
+        RegionStatus.Content = string.IsNullOrWhiteSpace(status) ? "Capture status unavailable." : status;
+    }
+
+    public void ClearRegionDraft()
+    {
+        RegionPreview.Source = null;
+        RegionPreview.ClearRegion();
+        Set(RegionPreviewPanel, HavenProperties.Visibility, HavenVisibility.Collapsed);
+        Set(ContextPanel, HavenProperties.Visibility, HavenVisibility.Collapsed);
+        RegionStatus.Content = "Choose a region from the captured frame.";
+        UpdateRegionSelectionState();
+    }
+
+    private void UpdateRegionSelectionState()
+    {
+        var hasSelection = RegionPreview.SelectedRegion is HavenRect region
+                           && double.IsFinite(region.X) && double.IsFinite(region.Y)
+                           && double.IsFinite(region.Width) && double.IsFinite(region.Height)
+                           && region.Width > 0 && region.Height > 0;
+        Set(ApplySelectionButton, HavenProperties.Enabled, hasSelection);
+        if (RegionPreview.Source is not null && !hasSelection)
+            RegionStatus.Content = "Drag over the captured frame to choose a region.";
+        else if (hasSelection)
+            RegionStatus.Content = "Region selected. Apply it when ready, or replace the capture.";
     }
 
     public void SetCollapsed(bool collapsed)
@@ -282,7 +444,7 @@ internal sealed class OverlayShellHavenScene : IDisposable
             var session = snapshot.Sessions[index];
             var item = _dynamicUi.CreateItem(
                 "OverlaySessionTab", "Overlay.SessionTabs", session.Id.ToString("N"),
-                new Dictionary<string, object?> { ["LABEL"] = session.Title + (session.IsPinned ? " Ã‚Â· pinned" : "") }, index);
+                new Dictionary<string, object?> { ["LABEL"] = session.Title + (session.IsPinned ? " · pinned" : "") }, index);
             var button = item.GetComponent<HavenButton>("Activate");
             button.Variant = session.Id == windowSessionId ? ButtonVariant.Primary : ButtonVariant.Secondary;
             var id = session.Id;
@@ -300,6 +462,18 @@ internal sealed class OverlayShellHavenScene : IDisposable
             ? session.SourceAssociation
               ?? (session.AppKey.Equals("chat", StringComparison.OrdinalIgnoreCase) ? "Haven Chat" : "Haven Go")
             : label;
+    }
+
+    private void ProjectRoute(OverlayCompactAppRoute route)
+    {
+        ModeButton.Content = route.IsRouter ? "Go · route" : route.Title;
+        ModeButton.Accessibility.AccessibleName = route.IsHome
+            ? "Overlay home"
+            : route.IsRouter ? "Go routing" : "Current Overlay app " + route.Title;
+        AppHostTitle.Content = route.IsRouter ? "Go routing" : route.Title;
+        AppHostIdentity.Content = route.Identity;
+        Set(AppHostPanel, HavenProperties.Visibility,
+            route.IsHome ? HavenVisibility.Collapsed : HavenVisibility.Visible);
     }
 
     private static string ContextLabel(OverlayContextEnvelope context) =>

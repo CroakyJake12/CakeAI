@@ -37,6 +37,20 @@ public sealed class OverlayForegroundContextCaptureServiceTests
     }
 
     [Fact]
+    public void BuildContext_bounds_alternate_computer_provider_text_to_eight_kibibytes()
+    {
+        var snapshot = new ComputerSelectionSnapshot(new string('x', 20_000), "writer", "Document",
+            null, null, null, null, null, null, null, null, null, DateTimeOffset.UtcNow, false);
+
+        var context = OverlayForegroundContextCaptureService.BuildContext(snapshot);
+
+        Assert.NotNull(context);
+        Assert.True(context!.WasTruncated);
+        Assert.Equal(8_192, context.SelectedText!.Length);
+        Assert.Equal(8_192, Assert.Single(context.SelectedItems).Text!.Length);
+    }
+
+    [Fact]
     public void BuildContext_returns_null_without_usable_windows_context()
     {
         var snapshot = new ComputerSelectionSnapshot(null, null, null, null, null, null, null,

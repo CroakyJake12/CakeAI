@@ -16,10 +16,10 @@ namespace Haven.Desktop.Views.Pages.Imagine;
 /// <summary>Dedicated Haven-native visual understanding and OCR workspace.</summary>
 public sealed partial class VisionPage : UserControl, IDisposable
 {
-    private readonly IProviderModelClient _models; private readonly VisionScene _scene = new(); private readonly HavenSceneControl _host; private CancellationTokenSource? _analysisCancellation; private string? _imagePath; private bool _disposed;
-    public VisionPage(IProviderModelClient models)
+    private readonly VisionAnalysisService _analysis; private readonly VisionScene _scene = new(); private readonly HavenSceneControl _host; private CancellationTokenSource? _analysisCancellation; private string? _imagePath; private bool _disposed;
+    public VisionPage(IProviderModelClient models, VisionAnalysisService? analysis = null)
     {
-        _models = models; _host = new HavenSceneControl { Root = _scene.Root }; Content = _host; _host.InputSubmitted += input => { if (ReferenceEquals(input, _scene.Question)) _ = AnalyseAsync(_scene.Question.Text); };
+        _analysis = analysis ?? new VisionAnalysisService(models ?? throw new ArgumentNullException(nameof(models))); _host = new HavenSceneControl { Root = _scene.Root }; Content = _host; _host.InputSubmitted += input => { if (ReferenceEquals(input, _scene.Question)) _ = AnalyseAsync(_scene.Question.Text); };
         _scene.ImportRequested += async (_, _) => await PickImageAsync(); _scene.AnalyseRequested += prompt => _ = AnalyseAsync(prompt); _scene.OcrRequested += (_, _) => _ = AnalyseAsync("Read and transcribe all visible text in this image. Preserve line breaks and clearly mark uncertain characters."); _scene.StopRequested += (_, _) => _analysisCancellation?.Cancel(); _scene.OpenImagineRequested += (_, _) => { if (!string.IsNullOrWhiteSpace(_imagePath)) OpenInImagineRequested?.Invoke(_imagePath); else _scene.SetStatus("Import an image before opening it in Imagine."); }; SizeChanged += (_, e) => _scene.SetViewportWidth(e.NewSize.Width);
         WirePlatformImageInput();
     }
@@ -53,19 +53,19 @@ public sealed partial class VisionPage : UserControl, IDisposable
                 _scene.SetStatus("Vision is analysing the selected image region…");
             }
 
-            var available = await _models.GetModelsAsync(cancellation.Token);
-            var model = available.FirstOrDefault(item => item.Supports(ToolCapability.Vision));
+            var model = await _analysis.GetVisionModelAsync(cancellation.Token);
             if (model is null) { _scene.SetStatus("No compatible vision model is available. The image was not sent to a text-only model."); return; }
             var normalizedPrompt = prompt.Trim();
             var analysisKey = await VisionWorkspaceStateStore.BuildAnalysisKeyAsync(analysisPath, model.Name, normalizedPrompt, cancellation.Token);
             if (TryUseCachedAnalysis(analysisKey, regionAnalysis)) return;
-            var response = await _models.CompleteAsync(new OllamaChatRequest(model.Name, [new OllamaMessage("user", normalizedPrompt, [analysisPath])], EffortLevel.Medium, "Act as Haven Vision. Analyse only the supplied image, distinguish observation from inference, transcribe visible text accurately, and state uncertainty."), cancellation.Token);
-            _scene.SetResponse(response, model.Name);
+            var result = await _analysis.AnalyzeResolvedAsync(new VisionAnalysisRequest(analysisPath, normalizedPrompt), model, cancellation.Token);
+            _scene.SetResponse(result.Response, result.Model);
             _scene.Question.Text = string.Empty;
-            await StoreAnalysisAsync(sourcePath, normalizedPrompt, response, model.Name, analysisKey);
+            await StoreAnalysisAsync(sourcePath, normalizedPrompt, result.Response, result.Model, analysisKey);
             _scene.SetStatus(regionAnalysis ? "Region analysis complete." : "Analysis complete.");
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { _scene.SetStatus("Vision analysis stopped."); }
+        catch (TimeoutException exception) { _scene.SetStatus("Vision analysis timed out: " + exception.Message); }
         catch (Exception exception) when (exception is HttpRequestException or IOException or InvalidOperationException) { _scene.SetStatus("Vision analysis failed: " + exception.Message); }
         finally
         {

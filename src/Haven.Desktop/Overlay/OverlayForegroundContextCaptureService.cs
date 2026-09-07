@@ -29,11 +29,14 @@ internal sealed class OverlayForegroundContextCaptureService(IComputerToolServic
         var kind = text is not null && hasUi ? OverlayContextKind.Mixed
             : text is not null ? OverlayContextKind.Text : OverlayContextKind.UiComponent;
         var capturedAt = snapshot.CapturedAt == default ? DateTimeOffset.UtcNow : snapshot.CapturedAt;
+        // WindowsComputerToolService already bounds the text to 8 KiB. Reapply the
+        // same boundary here so alternate IComputerToolService implementations cannot
+        // smuggle a larger prompt through the Overlay handoff.
         return new OverlayContextEnvelope(kind, text, [], null, new OverlayContextProvenance(
             snapshot.SourceApplication, snapshot.SourceWindow, bounds, capturedAt, capturedAt.AddMinutes(2),
             OverlayContextPermissionState.NotRequired,
             "Captured from the foreground Windows accessibility context."),
-            snapshot.WasTruncated, selections).Bound();
+            snapshot.WasTruncated, selections).Bound(maxTextLength: 8_192);
     }
 
     private static OverlaySelectionBounds? ValidBounds(ComputerSelectionSnapshot snapshot)
