@@ -1,0 +1,15 @@
+<!--
+  FILE DOCUMENTATION
+  Where: HavenOS Apps/Terminal/Tests/HavenOS.Terminal.Specs.csproj.
+  What: Zero-external-package executable checks for the standalone Terminal app boundary.
+  Why: Keeps focused behavior verification co-located with the app lane and runnable with dotnet run.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>HavenOS.Terminal.Specs</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\HavenOS.Terminal.csproj" />
+  </ItemGroup>
+</Project>

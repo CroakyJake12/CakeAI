@@ -1,0 +1,16 @@
+<!--
+  FILE DOCUMENTATION
+  Where: HavenOS Apps/Terminal/HavenOS.Terminal.csproj.
+  What: Builds the standalone HavenOS Terminal app surface against the existing application-layer terminal contracts.
+  Why: Keeps Terminal app ownership isolated while preserving the shared session engine and permission policy.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>HavenOS.Terminal</AssemblyName>
+    <RootNamespace>HavenOS.Apps.Terminal</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Haven.Application\Haven.Application.csproj" />
+    <Compile Remove="Tests\**\*.cs" />
+  </ItemGroup>
+</Project>
