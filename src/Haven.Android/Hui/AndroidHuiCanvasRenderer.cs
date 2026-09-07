@@ -160,7 +160,7 @@ public sealed class AndroidHuiCanvasRenderer
         AndroidPaint paint,
         HavenBrush brush,
         double opacity,
-        AndroidPaint.Style style,
+        AndroidPaint.Style? style,
         double strokeWidth,
         IAndroidHuiTokenColorResolver tokenColorResolver)
     {
@@ -174,11 +174,11 @@ public sealed class AndroidHuiCanvasRenderer
     private static void ConfigurePaint(
         AndroidPaint paint,
         AndroidColor color,
-        AndroidPaint.Style style,
+        AndroidPaint.Style? style,
         double strokeWidth)
     {
         paint.Color = color;
-        paint.SetStyle(style);
+        paint.SetStyle(style!);
         paint.StrokeWidth = (float)Math.Max(0, strokeWidth);
     }
 
