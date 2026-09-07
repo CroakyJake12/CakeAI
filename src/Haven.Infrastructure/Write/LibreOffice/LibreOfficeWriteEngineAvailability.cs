@@ -17,14 +17,14 @@ public static class LibreOfficeWriteEngineAvailability
         if (issues.Count == 0 && !File.Exists(options.HelperExecutablePath))
             issues.Add($"The Haven Write helper was not found at '{options.HelperExecutablePath}'.");
 
-        if (issues.Count == 0 && !Directory.Exists(options.LibreOfficeInstallPath))
-            issues.Add($"The LibreOffice installation was not found at '{options.LibreOfficeInstallPath}'.");
+        if (issues.Count == 0 && !Directory.Exists(options.LibreOfficeProgramPath))
+            issues.Add($"The LibreOffice program directory was not found at '{options.LibreOfficeProgramPath}'.");
 
-        var sofficeApp = Path.Combine(options.LibreOfficeInstallPath, "program", "libsofficeapp.so");
-        var merged = Path.Combine(options.LibreOfficeInstallPath, "program", "libmergedlo.so");
+        var sofficeApp = Path.Combine(options.LibreOfficeProgramPath, "libsofficeapp.so");
+        var merged = Path.Combine(options.LibreOfficeProgramPath, "libmergedlo.so");
         if (issues.Count == 0 && !File.Exists(sofficeApp) && !File.Exists(merged))
         {
-            issues.Add("LibreOfficeKit could not find libsofficeapp.so or libmergedlo.so in the configured LibreOffice installation.");
+            issues.Add("LibreOfficeKit could not find libsofficeapp.so or libmergedlo.so in the configured LibreOffice program directory.");
         }
 
         return new LibreOfficeWriteEngineAvailabilityResult(
