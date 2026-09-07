@@ -11,6 +11,8 @@ public readonly record struct HavenSize(double Width, double Height)
 
 public readonly record struct HavenRect(double X, double Y, double Width, double Height)
 {
+    public double Left => X;
+    public double Top => Y;
     public double Right => X + Width;
     public double Bottom => Y + Height;
 
