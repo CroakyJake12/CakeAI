@@ -1,17 +1,31 @@
-name: Build Haven Android APK
+name: Build CakeAI Android APK
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - haven-android-cloud-build
-      - gpt/haven-mobile-repair-android
+      - main
+    paths:
+      - ".github/workflows/build-haven-android.yml"
+      - ".github/scripts/haven-android-smoke.sh"
+      - "global.json"
+      - "NuGet.Config"
+      - "Directory.Build.props"
+      - "Directory.Build.targets"
+      - "Directory.Packages.props"
+      - "src/Haven.Android/**"
+      - "src/Haven.Application/**"
+      - "src/Haven.Browser/**"
+      - "src/Haven.Core/**"
+      - "src/Haven.Desktop/**"
+      - "src/Haven.Infrastructure/**"
+      - "src/Haven.UI/**"
 
 permissions:
   contents: read
 
 concurrency:
-  group: haven-android-${{ github.ref }}
+  group: cakeai-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -29,7 +43,7 @@ jobs:
       HAVEN_ANDROID_KEY_PASSWORD: ${{ secrets.HAVEN_ANDROID_KEY_PASSWORD }}
 
     steps:
-      - name: Check out Haven
+      - name: Check out CakeAI
         uses: actions/checkout@v6
 
       - name: Install .NET from global.json
@@ -61,7 +75,7 @@ jobs:
           fi
 
           {
-            echo "APP_VERSION="$app_version""
+            echo "APP_VERSION=$app_version"
             echo "DISPLAY_VERSION=$display_version"
             echo "SIGNING_MODE=$signing_mode"
             echo "SIGNING_ARGS=$signing_args"
@@ -148,7 +162,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: Haven-Android-Build-Logs
+          name: CakeAI-Android-Build-Logs
           path: |
             artifacts/android/*.log
             artifacts/android/build-metadata.txt
@@ -160,7 +174,7 @@ jobs:
       - name: Upload installable APK
         uses: actions/upload-artifact@v7
         with:
-          name: Haven-Android-APK
+          name: CakeAI-Android-APK
           path: |
             artifacts/android/*.apk
             artifacts/android/SHA256SUMS.txt
@@ -177,13 +191,13 @@ jobs:
     timeout-minutes: 50
 
     steps:
-      - name: Check out Haven
+      - name: Check out CakeAI
         uses: actions/checkout@v6
 
       - name: Download APK artifact
         uses: actions/download-artifact@v8
         with:
-          name: Haven-Android-APK
+          name: CakeAI-Android-APK
           path: artifacts/android
 
       - name: Enable KVM
@@ -194,7 +208,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Install and launch Haven
+      - name: Install and launch CakeAI
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
           api-level: 36
@@ -216,7 +230,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: Haven-Android-Smoke-Evidence
+          name: CakeAI-Android-Smoke-Evidence
           path: artifacts/smoke
           if-no-files-found: error
           retention-days: 30
