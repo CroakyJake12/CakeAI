@@ -10,6 +10,7 @@ public sealed class LibreOfficeWriteEngineOptionsTests
         var options = new LibreOfficeWriteEngineOptions();
 
         Assert.Empty(options.Validate());
+        Assert.Equal("/usr/lib/libreoffice/program", options.LibreOfficeProgramPath);
     }
 
     [Fact]
@@ -18,7 +19,7 @@ public sealed class LibreOfficeWriteEngineOptionsTests
         var options = new LibreOfficeWriteEngineOptions
         {
             HelperExecutablePath = "bin/haven-write-engine",
-            LibreOfficeInstallPath = "lib/libreoffice",
+            LibreOfficeProgramPath = "lib/libreoffice/program",
             ProfileRootDirectory = "profiles",
             StartupTimeout = TimeSpan.Zero,
             MaximumTileBytes = 300L * 1024L * 1024L
@@ -27,7 +28,7 @@ public sealed class LibreOfficeWriteEngineOptionsTests
         var errors = options.Validate();
 
         Assert.Contains(errors, value => value.Contains("helper executable path must be absolute", StringComparison.Ordinal));
-        Assert.Contains(errors, value => value.Contains("LibreOffice installation path must be absolute", StringComparison.Ordinal));
+        Assert.Contains(errors, value => value.Contains("LibreOffice program path must be absolute", StringComparison.Ordinal));
         Assert.Contains(errors, value => value.Contains("profile root must be absolute", StringComparison.Ordinal));
         Assert.Contains(errors, value => value.Contains("startup timeout", StringComparison.Ordinal));
         Assert.Contains(errors, value => value.Contains("maximum tile size", StringComparison.Ordinal));
