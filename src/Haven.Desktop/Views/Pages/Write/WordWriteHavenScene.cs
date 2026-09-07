@@ -20,6 +20,7 @@ internal sealed partial class WordWriteHavenScene : IDisposable
     private readonly Dictionary<Guid, Input> _blockInputs = [];
     private string _find = string.Empty, _replace = string.Empty, _comment = string.Empty, _citationTitle = string.Empty, _citationAuthors = string.Empty, _citationUrl = string.Empty;
     private string _aiInstruction = string.Empty; private bool _allowAiDocumentContext; private NotesAiChange? _pendingAiChange; private IReadOnlyList<string> _aiModels = []; private string _selectedAiModel = string.Empty;
+    private readonly Haven.Desktop.HavenUI.Runtime.TrailingDebouncer _statsDebouncer = new(TimeSpan.FromMilliseconds(300));
 
     public WordWriteHavenScene()
     {
@@ -124,7 +125,8 @@ internal sealed partial class WordWriteHavenScene : IDisposable
     public void SetBusy(bool busy) { foreach (var button in Root.DescendantsAndSelf().OfType<HavenButton>()) button.SetValue(HavenProperties.Enabled, !busy); TitleInput.SetValue(HavenProperties.Enabled, !busy && _editor is not null); if (!busy) RefreshCommands(); }
 
     private void OnTitleInvalidated(object? sender, EventArgs e) { if (_suppress || _editor is null || TitleInput.Text == _editor.Document.Title) return; _editor.SetTitle(TitleInput.Text); }
-    private void OnEditorChanged(object? sender, EventArgs e) { if (_editor is null) return; _suppress = true; try { if (TitleInput.Text != _editor.Document.Title) TitleInput.Text = _editor.Document.Title; } finally { _suppress = false; } DocumentSurface.InvalidateDocument(); UpdateStats(); RefreshCommands(); DocumentChanged?.Invoke(this, EventArgs.Empty); }
+    private void OnEditorChanged(object? sender, EventArgs e) { if (_editor is null) return; _suppress = true; try { if (TitleInput.Text != _editor.Document.Title) TitleInput.Text = _editor.Document.Title; } finally { _suppress = false; } DocumentSurface.InvalidateDocument(); // Word counts over the whole document are expensive: settle for 300ms while typing.
+_statsDebouncer.Schedule(UpdateStats); RefreshCommands(); DocumentChanged?.Invoke(this, EventArgs.Empty); }
     private void SetTab(WordWriteRibbonTab tab) { _tab = tab; RebuildRibbon(); }
     private void RebuildAll() { RebuildRibbon(); RebuildDocument(); UpdateStats(); RefreshCommands(); }
     private void RefreshCommands() { if (_editor is null) return; UndoButton.SetValue(HavenProperties.Enabled, _editor.CanUndo); RedoButton.SetValue(HavenProperties.Enabled, _editor.CanRedo); StyleRibbonTab(HomeTab, _tab == WordWriteRibbonTab.Home); StyleRibbonTab(InsertTab, _tab == WordWriteRibbonTab.Insert); StyleRibbonTab(LayoutTab, _tab == WordWriteRibbonTab.Layout); StyleRibbonTab(ReviewTab, _tab == WordWriteRibbonTab.Review); }
@@ -258,5 +260,5 @@ internal sealed partial class WordWriteHavenScene : IDisposable
     private static Input Field(string name, string accessible, string placeholder) { var input = new Input { Name = name, Placeholder = placeholder }; input.Accessibility.AccessibleName = accessible; input.SetValue(HavenProperties.Foreground, "ButtonTextSecondary"); input.SetValue(HavenProperties.MinHeight, HavenLength.Px(40)); return input; }
     private static Select Choice(string name, string accessible, IReadOnlyList<string> items, int index) { var select = new Select { Name = name, Items = items, SelectedIndex = index }; select.Accessibility.AccessibleName = accessible; select.SetValue(HavenProperties.Foreground, "ButtonTextSecondary"); select.SetValue(HavenProperties.MinWidth, HavenLength.Px(116)); return select; }
     private static HavenText Caption(string text) { var value = new HavenText(text) { Level = TextLevel.Caption }; value.SetValue(HavenProperties.Foreground, "ButtonTextSecondary"); return value; }
-    public void Dispose() { if (_disposed) return; _disposed = true; TitleInput.Invalidated -= OnTitleInvalidated; if (_editor is not null) _editor.Changed -= OnEditorChanged; PreviousRequested = null; NextRequested = null; NewRequested = null; ImportRequested = null; ExportRequested = null; SaveRequested = null; ImageRequested = null; DocumentChanged = null; }
+    public void Dispose() { if (_disposed) return; _disposed = true; _statsDebouncer.Dispose(); TitleInput.Invalidated -= OnTitleInvalidated; if (_editor is not null) _editor.Changed -= OnEditorChanged; PreviousRequested = null; NextRequested = null; NewRequested = null; ImportRequested = null; ExportRequested = null; SaveRequested = null; ImageRequested = null; DocumentChanged = null; }
 }

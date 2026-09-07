@@ -28,6 +28,7 @@ public abstract class HavenElement
     private readonly List<HavenElement> _children = [];
     private int _updateDepth;
     private bool _invalidationPending;
+    private HavenInvalidationKinds _pendingKinds;
 
     public HavenElement? Parent { get; private set; }
     public IReadOnlyList<HavenElement> Children => _children;
@@ -44,21 +45,53 @@ public abstract class HavenElement
     public event EventHandler? Invoked;
     public event EventHandler? SecondaryInvoked;
 
+    /// <summary>
+    /// Kinds accumulated by the most recent invalidation raise on this element.
+    /// Valid inside the Invalidated handler; hosts must read it first because
+    /// nested invalidations during reconciliation overwrite it.
+    /// </summary>
+    public HavenInvalidationKinds LastInvalidationKinds => _pendingKinds;
+
+    internal event Action<HavenElement, HavenInvalidationKinds>? InvalidationRaised;
+
     internal void InvokeSecondary()
     {
         SecondaryInvoked?.Invoke(this, EventArgs.Empty);
-        Invalidate();
+        Invalidate(HavenInvalidationKinds.Paint | HavenInvalidationKinds.Layout);
     }
 
     /// <summary>Requests a new Haven measure/render pass after component-owned state changes.</summary>
     protected internal void Invalidate()
     {
+        Invalidate(HavenInvalidationKinds.All);
+    }
+
+    /// <summary>Requests a scoped scene update so hosts can skip work that the change cannot affect.</summary>
+    protected internal void Invalidate(HavenInvalidationKinds kinds)
+    {
+        if (kinds == HavenInvalidationKinds.None) return;
         if (_updateDepth > 0)
         {
             _invalidationPending = true;
+            _pendingKinds |= kinds;
             return;
         }
-        Invalidated?.Invoke(this, EventArgs.Empty);
+        RaiseInvalidation(kinds);
+    }
+
+    private void RaiseInvalidation(HavenInvalidationKinds kinds)
+    {
+        _pendingKinds = kinds;
+        HavenUiDiagnostics.Record(kinds);
+        try
+        {
+            Invalidated?.Invoke(this, EventArgs.Empty);
+            InvalidationRaised?.Invoke(this, kinds);
+        }
+        finally
+        {
+            _pendingKinds = HavenInvalidationKinds.None;
+        }
     }
 
     public string? Name
@@ -119,7 +152,7 @@ public abstract class HavenElement
         }
         if (slot.TryGetValue(source, out var existing) && Equals(existing, value)) return;
         slot[source] = value;
-        Invalidate();
+        Invalidate(ClassifyChange(property));
     }
 
     internal void SetValue(HavenProperty property, object? value, HavenValueSource source)
@@ -134,7 +167,7 @@ public abstract class HavenElement
         }
         if (slot.TryGetValue(source, out var existing) && Equals(existing, value)) return;
         slot[source] = value;
-        Invalidate();
+        Invalidate(ClassifyChange(property));
     }
 
     public void ClearValue(HavenProperty property, HavenValueSource source)
@@ -142,8 +175,47 @@ public abstract class HavenElement
         ArgumentNullException.ThrowIfNull(property);
         if (!_values.TryGetValue(property, out var slot) || !slot.Remove(source)) return;
         if (slot.Count == 0) _values.Remove(property);
-        Invalidate();
+        Invalidate(ClassifyChange(property));
     }
+
+    /// <summary>Classifies the scene impact of a component-specific property change. Shared properties are classified centrally.</summary>
+    protected internal virtual HavenInvalidationKinds ClassifyValueChange(HavenProperty property) =>
+        HavenInvalidationKinds.Layout | HavenInvalidationKinds.Paint;
+
+    private HavenInvalidationKinds ClassifyChange(HavenProperty property)
+    {
+        if (ReferenceEquals(property, HavenProperties.Class) || ReferenceEquals(property, HavenProperties.Group))
+            return HavenInvalidationKinds.Style | HavenInvalidationKinds.Layout | HavenInvalidationKinds.Paint;
+        if (ReferenceEquals(property, HavenProperties.Animation) || ReferenceEquals(property, HavenProperties.Transition))
+            return HavenInvalidationKinds.Motion | HavenInvalidationKinds.Style | HavenInvalidationKinds.Paint;
+        if (ReferenceEquals(property, HavenProperties.Overflow))
+            return HavenInvalidationKinds.Motion | HavenInvalidationKinds.Layout | HavenInvalidationKinds.Paint;
+        if (IsVisualOnlyProperty(property))
+            return HavenInvalidationKinds.Motion | HavenInvalidationKinds.Paint;
+        return ClassifyValueChange(property);
+    }
+
+    private static bool IsVisualOnlyProperty(HavenProperty property) => ReferenceEquals(property, HavenProperties.Background)
+        || ReferenceEquals(property, HavenProperties.Foreground)
+        || ReferenceEquals(property, HavenProperties.Accent)
+        || ReferenceEquals(property, HavenProperties.Opacity)
+        || ReferenceEquals(property, HavenProperties.BorderColor)
+        || ReferenceEquals(property, HavenProperties.BorderWidth)
+        || ReferenceEquals(property, HavenProperties.Radius)
+        || ReferenceEquals(property, HavenProperties.Shadow)
+        || ReferenceEquals(property, HavenProperties.Glow)
+        || ReferenceEquals(property, HavenProperties.BackdropBlur)
+        || ReferenceEquals(property, HavenProperties.Scale)
+        || ReferenceEquals(property, HavenProperties.Rotation)
+        || ReferenceEquals(property, HavenProperties.TranslationX)
+        || ReferenceEquals(property, HavenProperties.TranslationY)
+        || ReferenceEquals(property, HavenProperties.TransformOrigin)
+        || ReferenceEquals(property, HavenProperties.ZIndex)
+        || ReferenceEquals(property, HavenProperties.Clip)
+        || ReferenceEquals(property, HavenProperties.Hover)
+        || ReferenceEquals(property, HavenProperties.PointerEvents)
+        || ReferenceEquals(property, HavenProperties.Cursor)
+        || ReferenceEquals(property, HavenProperties.Enabled);
 
     public void Add(HavenElement child)
     {
@@ -154,14 +226,14 @@ public abstract class HavenElement
             throw new InvalidOperationException("A Haven element already has a parent. Remove it before reparenting.");
         child.Parent = this;
         _children.Add(child);
-        Invalidate();
+        Invalidate(HavenInvalidationKinds.All);
     }
 
     public bool Remove(HavenElement child)
     {
         if (!_children.Remove(child)) return false;
         child.Parent = null;
-        Invalidate();
+        Invalidate(HavenInvalidationKinds.All);
         return true;
     }
 
@@ -173,14 +245,14 @@ public abstract class HavenElement
         {
             State = next;
             OnStateChanged();
-            Invalidate();
+            Invalidate(HavenInvalidationKinds.Motion | HavenInvalidationKinds.Paint);
         });
     }
 
     internal void Invoke()
     {
         Invoked?.Invoke(this, EventArgs.Empty);
-        Invalidate();
+        Invalidate(HavenInvalidationKinds.Paint | HavenInvalidationKinds.Layout);
     }
 
     protected virtual void OnStateChanged() { }
@@ -191,12 +263,12 @@ public abstract class HavenElement
     internal void SetAnimationSample(HavenProperty property, object? from, object? to, double progress)
     {
         _animationSamples[property] = new HavenAnimationSample(from, to, Math.Clamp(progress, 0d, 1d));
-        Invalidate();
+        Invalidate(HavenInvalidationKinds.Paint);
     }
 
     internal void ClearAnimationSample(HavenProperty property)
     {
-        if (_animationSamples.Remove(property)) Invalidate();
+        if (_animationSamples.Remove(property)) Invalidate(HavenInvalidationKinds.Paint);
     }
 
     internal void Update(Action update)
@@ -210,7 +282,10 @@ public abstract class HavenElement
             if (_updateDepth == 0 && _invalidationPending)
             {
                 _invalidationPending = false;
-                Invalidated?.Invoke(this, EventArgs.Empty);
+                var kinds = _pendingKinds == HavenInvalidationKinds.None ? HavenInvalidationKinds.All : _pendingKinds;
+                _pendingKinds = HavenInvalidationKinds.None;
+                HavenUiDiagnostics.RecordDeferredBatch();
+                RaiseInvalidation(kinds);
             }
         }
     }

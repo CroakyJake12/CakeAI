@@ -45,6 +45,12 @@ public sealed class Toggle : HavenElement
 
     internal void ToggleValue() => IsChecked = !IsChecked;
 
+    /// <summary>ToggleChange transitions animate the checked value, so changes must rescan motion.</summary>
+    protected internal override HavenInvalidationKinds ClassifyValueChange(HavenProperty property) =>
+        ReferenceEquals(property, CheckedProperty)
+            ? HavenInvalidationKinds.Motion | HavenInvalidationKinds.Paint
+            : base.ClassifyValueChange(property);
+
     public override HavenComponentMetadata Metadata => new(
         "Toggle",
         "Components/Toggle/Toggle.cs",

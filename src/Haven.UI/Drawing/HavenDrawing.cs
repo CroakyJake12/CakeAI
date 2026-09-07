@@ -77,6 +77,17 @@ public sealed record HavenGlowCommand(HavenRect Rect, HavenGlow Glow, double Rad
 public sealed class HavenDrawingContext
 {
     private readonly List<HavenDrawCommand> _commands = [];
+    private List<Haven.UI.Components.Select>? _overlaySelects;
     public IReadOnlyList<HavenDrawCommand> Commands => _commands;
     public void Add(HavenDrawCommand command) => _commands.Add(command ?? throw new ArgumentNullException(nameof(command)));
+
+    internal IReadOnlyList<Haven.UI.Components.Select> OverlaySelects => _overlaySelects ?? (IReadOnlyList<Haven.UI.Components.Select>)[];
+
+    internal void CollectOverlaySelect(Haven.UI.Components.Select select)
+    {
+        ArgumentNullException.ThrowIfNull(select);
+        (_overlaySelects ??= []).Add(select);
+    }
+
+    internal void ClearOverlaySelects() => _overlaySelects?.Clear();
 }

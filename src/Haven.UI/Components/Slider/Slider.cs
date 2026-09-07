@@ -58,6 +58,12 @@ public sealed class Slider : HavenElement
 
     public double NormalizedValue => _maximum <= _minimum ? 0d : (Value - _minimum) / (_maximum - _minimum);
 
+    /// <summary>SliderChange transitions animate the value, so changes must rescan motion.</summary>
+    protected internal override HavenInvalidationKinds ClassifyValueChange(HavenProperty property) =>
+        ReferenceEquals(property, ValueProperty)
+            ? HavenInvalidationKinds.Motion | HavenInvalidationKinds.Paint
+            : base.ClassifyValueChange(property);
+
     internal void SetFromPointer(double x)
     {
         var normalized = Bounds.Width <= 0 ? 0d : Math.Clamp((x - Bounds.X) / Bounds.Width, 0d, 1d);

@@ -193,6 +193,24 @@ public sealed partial class App : Avalonia.Application
             await shell.InitializeAsync(migration, CancellationToken.None);
             await shell.RestoreWorkspaceSessionAsync(CancellationToken.None);
 
+#if !ANDROID
+            await services.GetRequiredService<Haven.Desktop.Overlay.OverlayWorkspaceController>().InitializeAsync(CancellationToken.None);
+#endif
+            // Scheduled Tasks have no parallel automation delivery loop.
+
+            if (recoveryState.IsSafeMode)
+            {
+                services.GetRequiredService<NotificationService>().Show(
+                    "Haven recovery safe mode",
+                    recoveryState.Reason + " Local Ollama chat and read-only workspace inspection remain available.",
+                    ToastKind.Warning,
+                    TimeSpan.FromSeconds(30));
+            }
+
+            await recovery.MarkStartupCompletedAsync(CancellationToken.None);
+
+            // Optional Mesh warmup must not delay interactive readiness; data-safety
+            // work above stays on the critical path, Mesh does not.
             if (!recoveryState.IsSafeMode)
             {
                 try
@@ -216,21 +234,6 @@ public sealed partial class App : Avalonia.Application
                     }
                 }
             }
-#if !ANDROID
-            await services.GetRequiredService<Haven.Desktop.Overlay.OverlayWorkspaceController>().InitializeAsync(CancellationToken.None);
-#endif
-            // Scheduled Tasks have no parallel automation delivery loop.
-
-            if (recoveryState.IsSafeMode)
-            {
-                services.GetRequiredService<NotificationService>().Show(
-                    "Haven recovery safe mode",
-                    recoveryState.Reason + " Local Ollama chat and read-only workspace inspection remain available.",
-                    ToastKind.Warning,
-                    TimeSpan.FromSeconds(30));
-            }
-
-            await recovery.MarkStartupCompletedAsync(CancellationToken.None);
         }
         catch (Exception ex)
         {

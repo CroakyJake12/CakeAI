@@ -16,6 +16,8 @@ public sealed class HavenSceneRenderer
     private static void RenderElement(HavenElement element, HavenDrawingContext context, Func<HavenElement, bool>? suppressContent)
     {
         if (!element.IsIncluded || element.GetValue(HavenProperties.Visibility) != HavenVisibility.Visible) return;
+        if (element is Select { IsExpanded: true } expandedSelect && suppressContent?.Invoke(element) != true)
+            context.CollectOverlaySelect(expandedSelect);
         var opacity = Math.Clamp(element.GetValue(HavenProperties.Opacity), 0d, 1d);
         var scale = element.GetValue(HavenProperties.Scale);
         var rotation = element.GetValue(HavenProperties.Rotation);
@@ -54,20 +56,32 @@ public sealed class HavenSceneRenderer
             case Icon icon when !string.IsNullOrWhiteSpace(icon.Key): DrawAnimatedIcon(icon, context, opacity); break;
             }
         }
-        foreach (var child in element.Children.OrderBy(child => child.GetValue(HavenProperties.ZIndex))) RenderElement(child, context, suppressContent);
+        foreach (var child in OrderedChildren(element)) RenderElement(child, context, suppressContent);
         if (clipped) context.Add(new HavenPopClipCommand(element.Bounds));
         if (transformed) context.Add(new HavenPopTransformCommand(element.Bounds));
     }
 
+    /// <summary>
+    /// Z-ordered children without allocating a sorted buffer for the common
+    /// default-order case; OrderBy is stable so explicit ordering is identical.
+    /// </summary>
+    private static IEnumerable<HavenElement> OrderedChildren(HavenElement element)
+    {
+        var children = element.Children;
+        if (children.Count < 2) return children;
+        foreach (var child in children)
+            if (child.GetValue(HavenProperties.ZIndex) != 0)
+                return children.OrderBy(child => child.GetValue(HavenProperties.ZIndex));
+        return children;
+    }
+
     private static void RenderOverlays(HavenElement root, HavenDrawingContext context, Func<HavenElement, bool>? suppressContent)
     {
-        foreach (var select in root.DescendantsAndSelf().OfType<Select>()
-                     .Where(select => select.IsIncluded
-                         && select.IsExpanded
-                         && select.GetValue(HavenProperties.Visibility) == HavenVisibility.Visible
-                         && suppressContent?.Invoke(select) != true)
-                     .OrderBy(select => select.GetValue(HavenProperties.ZIndex)))
+        // Expanded selects are collected during the main traversal; this pass
+        // only orders and draws them instead of walking the tree again.
+        foreach (var select in context.OverlaySelects.OrderBy(select => select.GetValue(HavenProperties.ZIndex)))
             DrawSelectPopup(select, root.Bounds, context);
+        context.ClearOverlaySelects();
     }
 
     private static void DrawSelectPopup(Select select, HavenRect viewport, HavenDrawingContext context)

@@ -68,6 +68,15 @@ public sealed class HavenSceneControl : Panel, IHavenMeasureContext
     public event Action<Input>? InputSubmitted;
     public event Action? PointerPressedOutside;
 
+    // Per-instance reconciliation counters (DEBUG-style evidence; internal for tests).
+    internal long DiagApplyClassesRuns { get; private set; }
+    internal long DiagSubscriptionReconciles { get; private set; }
+    internal long DiagNativeReconciles { get; private set; }
+    internal long DiagMotionCaptures { get; private set; }
+    internal long DiagMeasurePasses { get; private set; }
+    internal long DiagRenderInvalidations { get; private set; }
+    internal long DiagArrangeLayoutSkips { get; private set; }
+
     protected override Avalonia.Automation.Peers.AutomationPeer OnCreateAutomationPeer() =>
         new HavenSceneAutomationPeer(this);
 
@@ -119,6 +128,7 @@ public sealed class HavenSceneControl : Panel, IHavenMeasureContext
 
     protected override Size MeasureOverride(Size availableSize)
     {
+        DiagMeasurePasses++;
         if (_root is null) return default;
 
         // Avalonia uses +Infinity on an Auto/unconstrained axis. Preserve that
@@ -136,6 +146,8 @@ public sealed class HavenSceneControl : Panel, IHavenMeasureContext
             Platform,
             this);
 
+        _lastMeasureAvailable = availableSize;
+
         return new Size(
             FiniteDesired(_root.DesiredSize.Width, metricWidth),
             FiniteDesired(_root.DesiredSize.Height, metricHeight));
@@ -151,10 +163,26 @@ public sealed class HavenSceneControl : Panel, IHavenMeasureContext
 
     private static double FiniteDesired(double desired, double fallback)
         => double.IsFinite(desired) ? Math.Max(0, desired) : Math.Max(0, fallback);
+
+    private Size _lastMeasureAvailable;
+
     protected override Size ArrangeOverride(Size finalSize)
     {
-        UpdateSurfaceMetrics(finalSize.Width, finalSize.Height);
-        if (_root is not null) _layout.Layout(_root, SurfaceMetrics.Viewport, Platform, this);
+        // The measure pass already laid out and arranged the scene when it ran
+        // against this exact finite size; re-running the full Haven layout here
+        // would duplicate every measure/arrange computation for no change.
+        var skipLayout = double.IsFinite(_lastMeasureAvailable.Width)
+            && Math.Abs(_lastMeasureAvailable.Width - finalSize.Width) < .01d
+            && Math.Abs(_lastMeasureAvailable.Height - finalSize.Height) < .01d;
+        if (skipLayout)
+        {
+            DiagArrangeLayoutSkips++;
+        }
+        else
+        {
+            UpdateSurfaceMetrics(finalSize.Width, finalSize.Height);
+            if (_root is not null) _layout.Layout(_root, SurfaceMetrics.Viewport, Platform, this);
+        }
         _drawingSurface.Arrange(new Rect(finalSize));
         ArrangeNativeControls();
         return finalSize;
@@ -742,20 +770,40 @@ public sealed class HavenSceneControl : Panel, IHavenMeasureContext
 
     private void OnSceneInvalidated(object? sender, EventArgs e)
     {
+        // The kinds must be read before any reconciliation work because nested
+        // invalidations raised during that work overwrite the element's kinds.
+        var element = sender as HavenElement;
+        var kinds = element?.LastInvalidationKinds ?? HavenInvalidationKinds.All;
+        ApplyInvalidation(element, kinds);
+    }
+
+    private void ApplyInvalidation(HavenElement? element, HavenInvalidationKinds kinds)
+    {
         if (_processingMotion)
         {
-            InvalidateMeasure();
+            if ((kinds & HavenInvalidationKinds.Layout) != 0 || _animations.HasActiveAnimations) InvalidateMeasure();
             InvalidateScene();
             return;
         }
-        if (_root is not null)
+        var reconciliationKinds = HavenInvalidationKinds.Style | HavenInvalidationKinds.Structure | HavenInvalidationKinds.Motion;
+        if (_root is not null && (kinds & reconciliationKinds) != 0)
         {
-            _resources.ApplyClasses(_root);
-            RefreshSubscriptions();
-            RefreshNativeControls();
+            if ((kinds & HavenInvalidationKinds.Style) != 0)
+            {
+                _resources.ApplyClasses(_root);
+                DiagApplyClassesRuns++;
+            }
+            if ((kinds & HavenInvalidationKinds.Structure) != 0)
+            {
+                RefreshSubscriptions();
+                DiagSubscriptionReconciles++;
+                RefreshNativeControls();
+                DiagNativeReconciles++;
+            }
             CaptureMotionState(_root, false);
+            DiagMotionCaptures++;
         }
-        InvalidateMeasure();
+        if ((kinds & HavenInvalidationKinds.Layout) != 0) InvalidateMeasure();
         InvalidateScene();
     }
 
@@ -795,6 +843,7 @@ public sealed class HavenSceneControl : Panel, IHavenMeasureContext
 
     private void InvalidateScene()
     {
+        DiagRenderInvalidations++;
         _drawingSurface.InvalidateVisual();
         InvalidateVisual();
     }

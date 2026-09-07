@@ -130,6 +130,8 @@ public sealed partial class MainView : UserControl, INotifyPropertyChanged, IDis
     private WorkspaceTabViewModel? _selectedTab;
     private string _startupStatus = "Starting Haven\u2026";
     private string _searchQuery = string.Empty;
+    private readonly Haven.Desktop.HavenUI.Runtime.TrailingDebouncer _sidebarSearchDebouncer = new(TimeSpan.FromMilliseconds(200));
+    private readonly Haven.Desktop.HavenUI.Runtime.LatestOperationGate _sidebarSearchGate = new();
     private string _commandSearch = string.Empty;
     private bool _isSidebarOpen = true;
     private bool _isCommandPaletteOpen;
@@ -577,7 +579,31 @@ public sealed partial class MainView : UserControl, INotifyPropertyChanged, IDis
     public string SearchQuery
     {
         get => _searchQuery;
-        set { if (SetProperty(ref _searchQuery, value)) _ = RefreshRecentsAsync(CancellationToken.None); }
+        set
+        {
+            if (!SetProperty(ref _searchQuery, value)) return;
+            // Typing stays immediate; the expensive repository refresh is
+            // debounced so "hello" triggers roughly one refresh, and a stale
+            // completion can never overwrite a newer one.
+            var generation = _sidebarSearchGate.Begin();
+            _sidebarSearchDebouncer.Schedule(() =>
+            {
+                if (!_sidebarSearchGate.IsActive(generation)) return;
+                _ = RunSidebarSearchRefreshAsync(generation);
+            });
+        }
+    }
+
+    private async Task RunSidebarSearchRefreshAsync(int generation)
+    {
+        try
+        {
+            await RefreshRecentsAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[Sidebar search] {ex}");
+        }
     }
 
     public string CommandSearch

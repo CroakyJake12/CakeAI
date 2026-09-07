@@ -40,8 +40,11 @@ public sealed class Input : HavenElement
         {
             var next = value ?? string.Empty;
             if (string.Equals(Text, next, StringComparison.Ordinal)) return;
-            SetValue(TextProperty, next);
-            SetValue(CaretIndexProperty, NormalizeCaret(next, GetValue(CaretIndexProperty)));
+            Update(() =>
+            {
+                SetValue(TextProperty, next);
+                SetValue(CaretIndexProperty, NormalizeCaret(next, GetValue(CaretIndexProperty)));
+            });
             TextChanged?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -126,10 +129,13 @@ public sealed class Input : HavenElement
         PushUndoState();
         var start = SelectionStart;
         var end = SelectionEnd;
-        Text = HasSelection
-            ? Text.Remove(start, end - start).Insert(start, insertion)
-            : Text.Insert(CaretIndex, insertion);
-        CollapseSelectionAt(start + insertion.Length);
+        Update(() =>
+        {
+            Text = HasSelection
+                ? Text.Remove(start, end - start).Insert(start, insertion)
+                : Text.Insert(CaretIndex, insertion);
+            CollapseSelectionAt(start + insertion.Length);
+        });
         return true;
     }
 
@@ -145,8 +151,11 @@ public sealed class Input : HavenElement
         if (index <= 0) return false;
         PushUndoState();
         var start = PreviousBoundary(Text, index);
-        Text = Text.Remove(start, index - start);
-        CollapseSelectionAt(start);
+        Update(() =>
+        {
+            Text = Text.Remove(start, index - start);
+            CollapseSelectionAt(start);
+        });
         return true;
     }
 
@@ -162,8 +171,11 @@ public sealed class Input : HavenElement
         if (index >= Text.Length) return false;
         PushUndoState();
         var end = NextBoundary(Text, index);
-        Text = Text.Remove(index, end - index);
-        CollapseSelectionAt(index);
+        Update(() =>
+        {
+            Text = Text.Remove(index, end - index);
+            CollapseSelectionAt(index);
+        });
         return true;
     }
 
@@ -219,8 +231,11 @@ public sealed class Input : HavenElement
     {
         var start = SelectionStart;
         var length = SelectionLength;
-        Text = Text.Remove(start, length);
-        CollapseSelectionAt(start);
+        Update(() =>
+        {
+            Text = Text.Remove(start, length);
+            CollapseSelectionAt(start);
+        });
     }
 
     private void PushUndoState()
@@ -280,6 +295,12 @@ public sealed class Input : HavenElement
     }
 
     private void SetCaret(int index) => SetValue(CaretIndexProperty, NormalizeCaret(Text, index));
+
+    /// <summary>Caret moves never change text metrics, so they repaint without a measure pass.</summary>
+    protected internal override HavenInvalidationKinds ClassifyValueChange(HavenProperty property) =>
+        ReferenceEquals(property, CaretIndexProperty)
+            ? HavenInvalidationKinds.Paint
+            : base.ClassifyValueChange(property);
 
     private static int NormalizeCaret(string text, int index)
     {
