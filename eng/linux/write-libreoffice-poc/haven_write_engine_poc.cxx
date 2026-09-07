@@ -7,11 +7,11 @@
 #include <LibreOfficeKit/LibreOfficeKitEnums.h>
 #include <LibreOfficeKit/LibreOfficeKitInit.h>
 
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
-#include <poll.h>
 
 #include <algorithm>
 #include <array>
@@ -23,7 +23,6 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -59,7 +58,6 @@ enum class Status : std::int32_t
     ForbiddenPath = 5,
     VersionMismatch = 6,
     Busy = 7,
-    UnauthorizedPeer = 8,
 };
 
 #pragma pack(push, 1)
@@ -88,8 +86,7 @@ struct PendingCommand
 
 std::string fileUrl(const std::filesystem::path& path)
 {
-    const auto absolute = std::filesystem::absolute(path).lexically_normal().generic_string();
-    return "file://" + absolute;
+    return "file://" + std::filesystem::absolute(path).lexically_normal().generic_string();
 }
 
 std::string compactPayload(const std::string& value)
@@ -108,16 +105,18 @@ std::string takeString(LibreOfficeKit* kit, char* value)
 {
     if (!value)
         return {};
+
     std::string result(value);
     if (kit && kit->pClass && kit->pClass->freeError)
         kit->pClass->freeError(value);
     return result;
 }
 
-bool startsWithDotDot(const std::filesystem::path& relative)
+bool escapesRoot(const std::filesystem::path& relative)
 {
     const auto first = relative.begin();
-    return first != relative.end() && *first == "..";
+    return relative.empty() || relative.is_absolute()
+        || (first != relative.end() && *first == "..");
 }
 
 class EngineService
@@ -135,12 +134,11 @@ public:
 
     ~EngineService()
     {
-        // LibreOfficeKit objects are deliberately process-scoped in this
-        // disposable unipoll helper. Destroying document/kit objects while or
-        // immediately after the external runLoop unwinds produced a repeatable
-        // post-Shutdown SIGSEGV with LibreOffice 24.2.7. Socket resources are
-        // still closed and unlinked explicitly; the process boundary reclaims
-        // LibreOffice state on exit.
+        // LibreOffice 24.2.7 showed repeatable post-Shutdown crashes when LOK
+        // document/kit destruction was attempted from or immediately after the
+        // external unipoll loop. This one-document PoC therefore makes the OS
+        // process the LOK reclamation boundary while still explicitly cleaning
+        // up the helper's own IPC resources.
         m_document = nullptr;
         m_pending.reset();
         closeClient();
@@ -152,19 +150,11 @@ public:
 
     bool initialiseSocket()
     {
-        if (!m_socketPath.is_absolute())
+        if (!m_socketPath.is_absolute()
+            || m_socketPath.string().size() >= sizeof(sockaddr_un::sun_path)
+            || std::filesystem::exists(m_socketPath))
         {
-            std::cerr << "FAIL: socket path must be absolute\n";
-            return false;
-        }
-        if (m_socketPath.string().size() >= sizeof(sockaddr_un::sun_path))
-        {
-            std::cerr << "FAIL: socket path is too long\n";
-            return false;
-        }
-        if (std::filesystem::exists(m_socketPath))
-        {
-            std::cerr << "FAIL: refusing to replace existing socket path: " << m_socketPath << '\n';
+            std::cerr << "FAIL: invalid, overlong, or pre-existing helper socket path\n";
             return false;
         }
 
@@ -231,14 +221,11 @@ public:
         int timeoutMs = 0;
         if (!m_pending)
         {
-            if (timeoutUs < 0)
-                timeoutMs = 100;
-            else
-                timeoutMs = std::clamp(timeoutUs / 1000, 0, 100);
+            timeoutMs = timeoutUs < 0 ? 100 : std::clamp(timeoutUs / 1000, 0, 100);
         }
 
-        const int pollResult = ::poll(descriptors.data(), count, timeoutMs);
-        if (pollResult < 0)
+        const int result = ::poll(descriptors.data(), count, timeoutMs);
+        if (result < 0)
         {
             if (errno == EINTR)
                 return 0;
@@ -276,8 +263,7 @@ public:
         if (value.find(m_pending->unoCommand) == std::string::npos)
             return;
 
-        const auto compact = compactPayload(value);
-        m_pending->failed = compact.find("\"success\":false") != std::string::npos;
+        m_pending->failed = compactPayload(value).find("\"success\":false") != std::string::npos;
         m_pending->completed = true;
         std::cout << "Helper observed command-result callback: " << m_pending->unoCommand << '\n';
     }
@@ -400,7 +386,7 @@ private:
         }
         if (m_pending)
         {
-            sendResponse(rawOpcode, requestId, Status::Busy, "semantic command already pending");
+            sendResponse(rawOpcode, requestId, Status::Busy, "engine command already pending");
             return;
         }
 
@@ -450,7 +436,11 @@ private:
         return false;
     }
 
-    void requireEmptyPayload(Opcode opcode, std::uint64_t requestId, const std::string& payload, std::string_view successPayload)
+    void requireEmptyPayload(
+        Opcode opcode,
+        std::uint64_t requestId,
+        const std::string& payload,
+        std::string_view successPayload)
     {
         if (!payload.empty())
         {
@@ -468,8 +458,7 @@ private:
             if (!path.is_absolute() || !std::filesystem::is_regular_file(path))
                 return std::nullopt;
             const auto candidate = std::filesystem::canonical(path);
-            const auto relative = std::filesystem::relative(candidate, m_ioRoot);
-            if (relative.empty() || relative.is_absolute() || startsWithDotDot(relative))
+            if (escapesRoot(std::filesystem::relative(candidate, m_ioRoot)))
                 return std::nullopt;
             return candidate;
         }
@@ -486,10 +475,8 @@ private:
             const std::filesystem::path path(payload);
             if (!path.is_absolute() || path.filename().empty())
                 return std::nullopt;
-            const auto parent = std::filesystem::canonical(path.parent_path());
-            const auto candidate = parent / path.filename();
-            const auto relative = std::filesystem::relative(candidate, m_ioRoot);
-            if (relative.empty() || relative.is_absolute() || startsWithDotDot(relative))
+            const auto candidate = std::filesystem::canonical(path.parent_path()) / path.filename();
+            if (escapesRoot(std::filesystem::relative(candidate, m_ioRoot)))
                 return std::nullopt;
             return candidate;
         }
@@ -499,6 +486,27 @@ private:
         }
     }
 
+    bool hasRequiredDocumentApi() const
+    {
+        return m_document
+            && m_document->pClass
+            && m_document->pClass->getDocumentType
+            && LIBREOFFICEKIT_DOCUMENT_HAS(m_document, registerCallback)
+            && m_document->pClass->registerCallback
+            && LIBREOFFICEKIT_DOCUMENT_HAS(m_document, postUnoCommand)
+            && m_document->pClass->postUnoCommand
+            && LIBREOFFICEKIT_DOCUMENT_HAS(m_document, getTextSelection)
+            && m_document->pClass->getTextSelection
+            && LIBREOFFICEKIT_DOCUMENT_HAS(m_document, setClipboard)
+            && m_document->pClass->setClipboard
+            && m_document->pClass->saveAs;
+    }
+
+    bool documentIsUsable() const
+    {
+        return m_document && !m_logicallyClosed;
+    }
+
     void handleOpen(std::uint64_t requestId, const std::string& payload)
     {
         if (m_document)
@@ -506,6 +514,7 @@ private:
             sendResponse(static_cast<std::uint16_t>(Opcode::Open), requestId, Status::InvalidState, "a document is already open for this helper lifetime");
             return;
         }
+
         const auto path = confinedExistingPath(payload);
         if (!path)
         {
@@ -517,29 +526,13 @@ private:
         m_document = m_kit->pClass->documentLoadWithOptions
             ? m_kit->pClass->documentLoadWithOptions(m_kit, url.c_str(), "ReadOnly=false")
             : m_kit->pClass->documentLoad(m_kit, url.c_str());
-        if (!m_document || !m_document->pClass
-            || !m_document->pClass->getDocumentType
+
+        if (!hasRequiredDocumentApi()
             || m_document->pClass->getDocumentType(m_document) != LOK_DOCTYPE_TEXT)
         {
-            // Do not call LibreOfficeKit document destroy from inside unipoll.
-            // This helper is one-document/process for the PoC; process exit is
-            // the engine reclamation boundary.
+            // LOK lifetime remains process-scoped in this disposable helper.
             m_document = nullptr;
-            sendResponse(static_cast<std::uint16_t>(Opcode::Open), requestId, Status::EngineFailure, "Writer document load failed");
-            return;
-        }
-        if (!LIBREOFFICEKIT_DOCUMENT_HAS(m_document, registerCallback)
-            || !m_document->pClass->registerCallback
-            || !LIBREOFFICEKIT_DOCUMENT_HAS(m_document, postUnoCommand)
-            || !m_document->pClass->postUnoCommand
-            || !LIBREOFFICEKIT_DOCUMENT_HAS(m_document, getTextSelection)
-            || !m_document->pClass->getTextSelection
-            || !LIBREOFFICEKIT_DOCUMENT_HAS(m_document, paste)
-            || !m_document->pClass->paste
-            || !m_document->pClass->saveAs)
-        {
-            m_document = nullptr;
-            sendResponse(static_cast<std::uint16_t>(Opcode::Open), requestId, Status::EngineFailure, "required Writer APIs are unavailable");
+            sendResponse(static_cast<std::uint16_t>(Opcode::Open), requestId, Status::EngineFailure, "Writer document load/API validation failed");
             return;
         }
 
@@ -555,7 +548,7 @@ private:
 
     void handleInsertText(std::uint64_t requestId, const std::string& payload)
     {
-        if (!m_document || m_logicallyClosed)
+        if (!documentIsUsable())
         {
             sendResponse(static_cast<std::uint16_t>(Opcode::InsertText), requestId, Status::InvalidState, "no document is open");
             return;
@@ -565,31 +558,45 @@ private:
             sendResponse(static_cast<std::uint16_t>(Opcode::InsertText), requestId, Status::InvalidPayload, "text payload must be 1..65536 bytes");
             return;
         }
-        if (!m_document->pClass->paste(
-                m_document,
-                "text/plain;charset=utf-8",
-                payload.data(),
-                payload.size()))
+
+        const char* mimeTypes[] = {"text/plain;charset=utf-8"};
+        const size_t sizes[] = {payload.size()};
+        const char* streams[] = {payload.data()};
+        if (!m_document->pClass->setClipboard(m_document, 1, mimeTypes, sizes, streams))
         {
-            sendResponse(static_cast<std::uint16_t>(Opcode::InsertText), requestId, Status::EngineFailure, "Writer paste failed");
+            sendResponse(static_cast<std::uint16_t>(Opcode::InsertText), requestId, Status::EngineFailure, "Writer setClipboard failed");
             return;
         }
-        sendResponse(static_cast<std::uint16_t>(Opcode::InsertText), requestId, Status::Ok, "text-inserted");
+
+        // LOK paste() dispatches .uno:Paste without a completion listener.
+        // Across IPC that allowed the client to issue SelectAll before the edit
+        // was observably complete on the minimal runtime image. Split the same
+        // operation into setClipboard + notifying .uno:Paste and do not answer
+        // InsertText until LOK_CALLBACK_UNO_COMMAND_RESULT arrives.
+        beginCommand(Opcode::InsertText, requestId, ".uno:Paste");
     }
 
-    void handleSemanticCommand(Opcode opcode, std::uint64_t requestId, const std::string& payload, std::string unoCommand)
+    void handleSemanticCommand(
+        Opcode opcode,
+        std::uint64_t requestId,
+        const std::string& payload,
+        std::string unoCommand)
     {
         if (!payload.empty())
         {
             sendResponse(static_cast<std::uint16_t>(opcode), requestId, Status::InvalidPayload, "semantic command payload must be empty");
             return;
         }
-        if (!m_document || m_logicallyClosed)
+        if (!documentIsUsable())
         {
             sendResponse(static_cast<std::uint16_t>(opcode), requestId, Status::InvalidState, "no document is open");
             return;
         }
+        beginCommand(opcode, requestId, std::move(unoCommand));
+    }
 
+    void beginCommand(Opcode opcode, std::uint64_t requestId, std::string unoCommand)
+    {
         m_pending = PendingCommand{
             opcode,
             requestId,
@@ -598,8 +605,12 @@ private:
             false,
             std::chrono::steady_clock::now() + kCommandDeadline,
         };
-        m_document->pClass->postUnoCommand(m_document, m_pending->unoCommand.c_str(), nullptr, true);
-        std::cout << "Helper dispatched allow-listed semantic command request=" << requestId
+        m_document->pClass->postUnoCommand(
+            m_document,
+            m_pending->unoCommand.c_str(),
+            nullptr,
+            true);
+        std::cout << "Helper dispatched notifying command request=" << requestId
                   << " uno=" << m_pending->unoCommand << '\n';
     }
 
@@ -607,12 +618,18 @@ private:
     {
         if (!m_pending)
             return;
+
         const auto pending = *m_pending;
         m_pending.reset();
-
         if (pending.failed)
         {
             sendResponse(static_cast<std::uint16_t>(pending.opcode), pending.requestId, Status::EngineFailure, "LibreOffice reported command failure");
+            return;
+        }
+
+        if (pending.opcode == Opcode::InsertText)
+        {
+            sendResponse(static_cast<std::uint16_t>(pending.opcode), pending.requestId, Status::Ok, "text-inserted");
             return;
         }
 
@@ -628,9 +645,12 @@ private:
             const auto actualMimeType = takeString(m_kit, usedMimeType);
             if (selectedText.find(kSemanticMarker) == std::string::npos)
             {
+                std::cerr << "SelectAll completed but IPC marker was absent; selected bytes="
+                          << selectedText.size() << '\n';
                 sendResponse(static_cast<std::uint16_t>(pending.opcode), pending.requestId, Status::EngineFailure, "completed selection did not contain IPC proof marker");
                 return;
             }
+
             std::cout << "Helper selected text after callback: " << selectedText.size()
                       << " bytes mime=" << (actualMimeType.empty() ? "unknown" : actualMimeType) << '\n';
             sendResponse(static_cast<std::uint16_t>(pending.opcode), pending.requestId, Status::Ok, selectedText);
@@ -642,17 +662,19 @@ private:
 
     void handleSave(std::uint64_t requestId, const std::string& payload)
     {
-        if (!m_document || m_logicallyClosed)
+        if (!documentIsUsable())
         {
             sendResponse(static_cast<std::uint16_t>(Opcode::Save), requestId, Status::InvalidState, "no document is open");
             return;
         }
+
         const auto output = confinedOutputPath(payload);
         if (!output)
         {
             sendResponse(static_cast<std::uint16_t>(Opcode::Save), requestId, Status::ForbiddenPath, "output path is outside the allowed I/O root or invalid");
             return;
         }
+
         const auto url = fileUrl(*output);
         if (!m_document->pClass->saveAs(m_document, url.c_str(), "odt", nullptr))
         {
@@ -669,16 +691,12 @@ private:
             sendResponse(static_cast<std::uint16_t>(Opcode::Close), requestId, Status::InvalidPayload, "payload must be empty");
             return;
         }
-        if (!m_document || m_logicallyClosed)
+        if (!documentIsUsable())
         {
             sendResponse(static_cast<std::uint16_t>(Opcode::Close), requestId, Status::InvalidState, "no document is open");
             return;
         }
 
-        // Closing is logical inside the running unipoll loop. The helper is
-        // intentionally one-document/process in this PoC, so LibreOfficeKit
-        // object reclamation is deferred to process exit rather than invoking
-        // destroy from a client poll callback.
         m_logicallyClosed = true;
         m_pending.reset();
         sendResponse(static_cast<std::uint16_t>(Opcode::Close), requestId, Status::Ok, "closed");
@@ -691,20 +709,25 @@ private:
             sendResponse(static_cast<std::uint16_t>(Opcode::Shutdown), requestId, Status::InvalidPayload, "payload must be empty");
             return;
         }
+
         m_logicallyClosed = true;
         m_pending.reset();
         sendResponse(static_cast<std::uint16_t>(Opcode::Shutdown), requestId, Status::Ok, "shutdown");
         m_shutdown = true;
     }
 
-    void sendResponse(std::uint16_t requestOpcode, std::uint64_t requestId, Status status, std::string_view payload)
+    void sendResponse(
+        std::uint16_t requestOpcode,
+        std::uint64_t requestId,
+        Status status,
+        std::string_view payload)
     {
         if (m_clientFd < 0)
             return;
         if (payload.size() > kMaxPayloadBytes)
             payload = "response payload exceeded limit";
 
-        FrameHeader header{
+        const FrameHeader header{
             kMagic,
             kVersion,
             static_cast<std::uint16_t>(requestOpcode | 0x8000U),
@@ -789,11 +812,6 @@ int main(int argc, char** argv)
             return 68;
 
         kit->pClass->runLoop(kit, clientPoll, clientWake, &service);
-
-        // LibreOffice 24.2.7's external unipoll lifecycle is treated as
-        // process-scoped for this one-document helper PoC. The OS process
-        // boundary reclaims the LOK document/kit; normal C++ destruction here
-        // is limited to our Unix-socket/client resources.
         std::cout << "PASS: isolated Haven Write helper exited cleanly\n";
         return 0;
     }
