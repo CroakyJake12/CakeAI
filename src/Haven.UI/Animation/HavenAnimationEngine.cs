@@ -33,9 +33,19 @@ public sealed record HavenAnimationSnapshot(IReadOnlyDictionary<HavenProperty, o
 public sealed class HavenAnimationEngine
 {
     private readonly List<ActiveMotion> _active = [];
+    private HavenMotionPolicy _motionPolicy = new();
 
     public bool HasActiveAnimations => _active.Count > 0;
-    public HavenMotionPolicy MotionPolicy { get; set; } = new();
+    public HavenMotionPolicy MotionPolicy
+    {
+        get => _motionPolicy;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _motionPolicy = value;
+            if (_active.Count > 0 && (value.ReducedMotion || value.DurationScale <= 0d)) CompleteActiveAnimations();
+        }
+    }
     public event EventHandler<HavenAnimationLifecycleEventArgs>? LifecycleChanged;
 
     public bool HasActiveAnimation(HavenElement element) => _active.Any(active => ReferenceEquals(active.Element, element));
@@ -133,6 +143,18 @@ public sealed class HavenAnimationEngine
     public void StopAll()
     {
         foreach (var element in _active.Select(active => active.Element).Distinct().ToArray()) Stop(element);
+    }
+
+    private void CompleteActiveAnimations()
+    {
+        for (var index = _active.Count - 1; index >= 0; index--)
+        {
+            var active = _active[index];
+            Apply(active, 1d);
+            ClearAnimationValues(active);
+            _active.RemoveAt(index);
+            Raise(active, HavenAnimationLifecycleState.Completed);
+        }
     }
 
     private void Start(ActiveMotion active)

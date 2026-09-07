@@ -137,9 +137,19 @@ public abstract class HavenElement
     {
         ArgumentNullException.ThrowIfNull(property);
         if (!_values.TryGetValue(property, out var slot) || slot.Count == 0) return property.DefaultValue;
-        var sources = slot.Keys.Where(source => source <= maximumSource).ToArray();
-        if (sources.Length == 0) return property.DefaultValue;
-        return slot[sources.Max()];
+
+        var found = false;
+        var selectedSource = default(HavenValueSource);
+        object? selectedValue = null;
+        foreach (var pair in slot)
+        {
+            if (pair.Key > maximumSource || (found && pair.Key <= selectedSource)) continue;
+            found = true;
+            selectedSource = pair.Key;
+            selectedValue = pair.Value;
+        }
+
+        return found ? selectedValue : property.DefaultValue;
     }
 
     public void SetValue<T>(HavenProperty<T> property, T value, HavenValueSource source = HavenValueSource.Explicit)
@@ -244,9 +254,20 @@ public abstract class HavenElement
         Update(() =>
         {
             State = next;
+            SynchronizeAccessibilityState(state);
             OnStateChanged();
             Invalidate(HavenInvalidationKinds.Motion | HavenInvalidationKinds.Paint);
         });
+    }
+
+    private void SynchronizeAccessibilityState(HavenElementState changedState)
+    {
+        if ((changedState & HavenElementState.Disabled) != 0)
+            Accessibility.Enabled = !State.HasFlag(HavenElementState.Disabled);
+        if ((changedState & HavenElementState.Selected) != 0)
+            Accessibility.Selected = State.HasFlag(HavenElementState.Selected);
+        if ((changedState & HavenElementState.Checked) != 0)
+            Accessibility.Checked = State.HasFlag(HavenElementState.Checked);
     }
 
     internal void Invoke()
