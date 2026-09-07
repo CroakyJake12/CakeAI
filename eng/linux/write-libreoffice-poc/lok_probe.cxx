@@ -4,6 +4,7 @@
 #include <LibreOfficeKit/LibreOfficeKitEnums.h>
 #include <LibreOfficeKit/LibreOfficeKitInit.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
