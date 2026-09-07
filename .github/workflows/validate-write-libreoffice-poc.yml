@@ -23,14 +23,14 @@ jobs:
 
     steps:
       - name: Check out pull request
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install .NET from global.json
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
 
-      - name: Install narrow LibreOfficeKit runtime
+      - name: Install headless Writer runtime and LibreOfficeKit build headers
         shell: bash
         run: |
           set -euo pipefail
@@ -125,6 +125,23 @@ jobs:
             /tmp/haven-write-fixture.odt \
             /tmp/haven-write-roundtrip.odt
           test -s /tmp/haven-write-roundtrip.odt
+
+      - name: Verify persisted Writer edit in ODT payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          marker = 'HAVEN_WRITE_LOK_EDIT_PROOF_20260907'
+          output = Path('/tmp/haven-write-roundtrip.odt')
+          with ZipFile(output) as archive:
+              content = archive.read('content.xml').decode('utf-8')
+          if marker not in content:
+              raise SystemExit('FAIL: LibreOfficeKit edit marker was not persisted to ODT content.xml')
+          print('PASS: persisted Writer edit marker found in ODT content.xml')
+          PY
 
       - name: Record probe evidence summary
         if: always()
