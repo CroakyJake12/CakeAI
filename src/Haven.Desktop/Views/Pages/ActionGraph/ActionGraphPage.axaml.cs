@@ -1,22 +1,28 @@
-using Avalonia;
-using Avalonia.Automation;
+using System.Text;
 using Avalonia.Controls;
-using Avalonia.Controls.Shapes;
-using Avalonia.Input;
-using Avalonia.Layout;
-using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Haven.Application;
 using Haven.Core;
-using Haven.Desktop.HavenUI.Components;
+using Haven.Desktop.HavenUI.Backend;
+using Haven.UI;
+using Haven.UI.Components;
+using HavenButton = Haven.UI.Components.Button;
+using HavenText = Haven.UI.Components.Text;
 
 namespace Haven.Desktop.Views.Pages.ActionGraph;
 
-/// <summary>Graph and chronological projections over the same persisted execution trace.</summary>
+/// <summary>
+/// Adapter between the persisted execution-trace services and the Action Graph HUI scene.
+/// Graph and list are projections over the same authoritative events; feedback, remediation
+/// and Fix-with-AI keep their original behaviour.
+/// </summary>
 public sealed partial class ActionGraphPage : UserControl, IDisposable
 {
-    private const double NodeWidth = 228;
-    private const double NodeHeight = 112;
+    private const int DefaultHistoryLimit = 120;
+    private const int FullHistoryLimit = 500;
+    private const int ListPageSize = 120;
+
     private readonly ExecutionTraceService _traces;
     private readonly IActionFeedbackRepository _feedback;
     private readonly IRemediationRepository _remediations;
@@ -24,15 +30,21 @@ public sealed partial class ActionGraphPage : UserControl, IDisposable
     private readonly ExecutionEventHub? _hub;
     private readonly Action<string> _fixWithAi;
     private readonly Action _openSettings;
+    private readonly ActionGraphHavenScene _scene = new();
+    private readonly ActionGraphSurface _surface = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly DispatcherTimer _liveRefreshTimer;
     private IReadOnlyList<ExecutionSummary> _summaries = [];
     private IReadOnlyList<ExecutionEvent> _events = [];
+    private ActionGraphModel _model = ActionGraphModel.Empty;
+    private ActionGraphMetrics _metrics = new(0, 0, 0, 0, 0, null);
+    private IReadOnlyList<ActionGraphNode> _visibleNodes = [];
     private ExecutionSummary? _selectedExecution;
-    private ExecutionEvent? _selectedAction;
+    private Guid? _selectedActionId;
     private ActionFeedback? _selectedFeedback;
+    private int _historyLimit = DefaultHistoryLimit;
+    private int _listRowsShown;
     private bool _graphView = true;
-    private double _zoom = 1;
     private bool _disposed;
     private int _liveRefreshQueued;
 
@@ -52,299 +64,403 @@ public sealed partial class ActionGraphPage : UserControl, IDisposable
         _hub = hub;
         _fixWithAi = fixWithAi;
         _openSettings = openSettings;
+
+        InitializeComponent();
+        Scene.Root = _scene.Root;
+
+        // The retained surface must paint and hit-test beneath the zoom overlay cluster.
+        _scene.GraphOverlay.Children.ToList().ForEach(child => child.Parent?.Remove(child));
+        _scene.GraphOverlay.Add(_surface);
+        _scene.GraphOverlay.Add(_scene.EmptyStateText);
+        _scene.GraphOverlay.Add(_scene.ZoomCluster);
+
+        WireScene();
         _liveRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
         _liveRefreshTimer.Tick += RefreshLiveTrace;
-        InitializeComponent();
-        GraphViewButton.Click += (_, _) => SetView(true);
-        ListViewButton.Click += (_, _) => SetView(false);
-        HistorySearch.TextChanged += (_, _) => RenderHistory();
-        ZoomInButton.Click += (_, _) => SetZoom(_zoom + .15);
-        ZoomOutButton.Click += (_, _) => SetZoom(_zoom - .15);
-        FitButton.Click += (_, _) => FitGraph();
-        ThumbUpButton.Click += async (_, _) => await SaveRatingAsync(ActionFeedbackRating.Positive);
-        ThumbDownButton.Click += async (_, _) => await SaveRatingAsync(ActionFeedbackRating.Negative);
-        SaveCommentButton.Click += async (_, _) => await SaveCommentAsync();
-        DeleteFeedbackButton.Click += async (_, _) => await DeleteFeedbackAsync();
-        SizeChanged += (_, _) => ApplyResponsiveLayout(Bounds.Width);
         if (_hub is not null) _hub.Published += OnEventPublished;
+        SizeChanged += (_, args) => _scene.SetCompact(args.NewSize.Width < 980);
         _ = LoadHistoryAsync();
     }
 
+    internal ActionGraphHavenScene Scene => _scene;
+    internal ActionGraphSurface Surface => _surface;
+    internal HavenSceneControl SceneHost => Scene;
+
+    private void WireScene()
+    {
+        _scene.GraphViewButton.Invoked += (_, _) => SetViewMode(true);
+        _scene.ListViewButton.Invoked += (_, _) => SetViewMode(false);
+        _scene.ExportButton.Invoked += (_, _) => _ = ExportAsync();
+        _scene.LiveSelect.SelectionChanged += (_, _) => ApplyLiveMode();
+        _scene.HistorySearch.TextChanged += (_, _) => RenderHistory();
+        _scene.ViewAllHistoryButton.Invoked += (_, _) => _ = LoadFullHistoryAsync();
+        _scene.ZoomInButton.Invoked += (_, _) => _surface.SetZoom(_surface.Zoom * 1.15);
+        _scene.ZoomOutButton.Invoked += (_, _) => _surface.SetZoom(_surface.Zoom / 1.15);
+        _scene.FitButton.Invoked += (_, _) => { if (_surface.FitToContent()) _scene.SetZoomPercent(_surface.Zoom); };
+        _scene.CollapseDetailsButton.Invoked += (_, _) => _scene.SetDetailsCollapsed(!_scene.IsDetailsCollapsed());
+        _scene.ThumbUpButton.Invoked += (_, _) => _ = SaveRatingAsync(ActionFeedbackRating.Positive);
+        _scene.ThumbDownButton.Invoked += (_, _) => _ = SaveRatingAsync(ActionFeedbackRating.Negative);
+        _scene.SaveCommentButton.Invoked += (_, _) => _ = SaveCommentAsync();
+        _scene.DeleteFeedbackButton.Invoked += (_, _) => _ = DeleteFeedbackAsync();
+        _surface.SelectionChanged += OnSurfaceSelectionChanged;
+        _surface.ViewportChanged += () =>
+        {
+            if (_graphView) _scene.SetZoomPercent(_surface.Zoom);
+        };
+    }
+
+    // ---------- History sidebar ----------
+
     private async Task LoadHistoryAsync()
     {
-        _summaries = await _traces.SearchAsync(HistorySearch.Text, 250, _lifetime.Token);
-        await Dispatcher.UIThread.InvokeAsync(RenderHistory);
-        if (_selectedExecution is null && _summaries.Count > 0)
-            await SelectExecutionAsync(_summaries[0]);
+        try
+        {
+            var summaries = await _traces.SearchAsync(null, _historyLimit, _lifetime.Token);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                _summaries = summaries;
+                RenderHistory();
+                _scene.SetStatus(_summaries.Count == 0
+                    ? "No executions recorded yet. Run a task or conversation and return here for its execution graph."
+                    : $"{_summaries.Count} recent execution{(_summaries.Count == 1 ? string.Empty : "s")} loaded.");
+                if (_selectedExecution is null && _summaries.Count > 0) _ = SelectExecutionAsync(_summaries[0]);
+            });
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
     }
+
+    private async Task LoadFullHistoryAsync()
+    {
+        if (_historyLimit >= FullHistoryLimit)
+        {
+            _scene.SetStatus($"Full history window already loaded ({_summaries.Count} executions).");
+            return;
+        }
+        _historyLimit = FullHistoryLimit;
+        await LoadHistoryAsync();
+        _scene.SetStatus($"Loaded the full history window: {_summaries.Count} executions.");
+    }
+
+    private void RenderHistory()
+    {
+        _scene.HistoryList.Children.ToList().ForEach(child => child.Parent?.Remove(child));
+        var query = _scene.HistorySearch.Text?.Trim();
+        var matches = _summaries
+            .Where(item => string.IsNullOrWhiteSpace(query)
+                || item.PromptSummary.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        foreach (var summary in matches)
+        {
+            var selected = _selectedExecution?.ExecutionId == summary.ExecutionId;
+            var row = new Container { Name = $"ActionGraph.History.{summary.ExecutionId:N}", Layout = HavenLayout.Vertical };
+            row.SetValue(HavenProperties.Padding, HavenThickness.Parse("8px"));
+            row.SetValue(HavenProperties.Radius, HavenCornerRadius.Uniform(HavenLength.Px(10)));
+            row.SetValue(HavenProperties.Background, selected ? "AccentSubtle" : "Transparent");
+            row.SetValue(HavenProperties.BorderColor, "Accent");
+            row.SetValue(HavenProperties.BorderWidth, HavenLength.Px(selected ? 1 : 0));
+            row.Accessibility.Role = HavenAccessibleRole.ListItem;
+            row.Accessibility.AccessibleName =
+                $"{summary.PromptSummary}, {ActionGraphProjection.FormatRelative(summary.UpdatedAt)}, {summary.ActionCount} steps";
+            row.Accessibility.Focusable = true;
+            var title = new HavenText(Truncate(summary.PromptSummary, 64)) { Level = TextLevel.Caption };
+            title.SetValue(HavenProperties.FontWeight, 700);
+            var meta = new HavenText($"{ActionGraphProjection.FormatRelative(summary.UpdatedAt)} · {summary.ActionCount} steps")
+            {
+                Level = TextLevel.Caption
+            };
+            meta.SetValue(HavenProperties.Foreground, "TextMuted");
+            row.Add(title);
+            row.Add(meta);
+            var captured = summary;
+            row.Invoked += async (_, _) => await SelectExecutionAsync(captured);
+            row.SecondaryInvoked += async (_, _) => await SelectExecutionAsync(captured);
+            _scene.HistoryList.Add(row);
+        }
+        if (_summaries.Count > 0 && matches.Length == 0)
+        {
+            var empty = new HavenText("No prompts match this filter.") { Level = TextLevel.Caption };
+            empty.SetValue(HavenProperties.Foreground, "TextMuted");
+            _scene.HistoryList.Add(empty);
+        }
+    }
+
+    // ---------- Execution selection ----------
 
     public async Task OpenAsync(Guid executionId, Guid? actionId = null)
     {
         var summary = _summaries.FirstOrDefault(item => item.ExecutionId == executionId);
         if (summary is null)
         {
-            _summaries = await _traces.SearchAsync(null, 500, _lifetime.Token);
+            _summaries = await _traces.SearchAsync(null, FullHistoryLimit, _lifetime.Token);
             summary = _summaries.FirstOrDefault(item => item.ExecutionId == executionId);
+            await Dispatcher.UIThread.InvokeAsync(RenderHistory);
         }
         if (summary is null) return;
         await SelectExecutionAsync(summary);
-        if (actionId is { } id && _events.FirstOrDefault(item => item.ActionId == id) is { } action)
-            await SelectActionAsync(action);
-    }
-
-    private void RenderHistory()
-    {
-        HistoryItems.Children.Clear();
-        var query = HistorySearch.Text?.Trim();
-        foreach (var summary in _summaries.Where(item => string.IsNullOrWhiteSpace(query) || item.PromptSummary.Contains(query, StringComparison.OrdinalIgnoreCase)))
-        {
-            var selected = _selectedExecution?.ExecutionId == summary.ExecutionId;
-            var button = new HavenButton
+        if (actionId is { } id && _events.Any(item => item.ActionId == id))
+            await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Content = new StackPanel
-                {
-                    Children =
-                    {
-                        new TextBlock { Text = StatusGlyph(summary.Status) + " " + Truncate(summary.PromptSummary, 72), TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.Bold },
-                        new TextBlock { Text = $"{summary.UpdatedAt.LocalDateTime:g} · {summary.ActionCount} actions · {FormatDuration(summary.Duration)}", Classes = { "muted" }, FontSize = 11 }
-                    }
-                }
-            };
-            button.Classes.Add(selected ? "accent" : "secondary");
-            AutomationProperties.SetName(button, $"Open execution {summary.PromptSummary}");
-            button.Click += async (_, _) => await SelectExecutionAsync(summary);
-            HistoryItems.Children.Add(button);
-        }
+                _surface.SelectAction(id);
+                OnSurfaceSelectionChanged(id);
+            });
     }
 
     private async Task SelectExecutionAsync(ExecutionSummary summary)
     {
+        IReadOnlyList<ExecutionEvent> trace;
+        try { trace = await _traces.GetTraceAsync(summary.ExecutionId, _lifetime.Token); }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { return; }
+
+        var collapsed = ActionGraphProjection.Collapse(trace);
+        var model = ActionGraphProjection.BuildGraph(trace);
+        var metrics = ActionGraphProjection.ComputeMetrics(summary, trace);
         _selectedExecution = summary;
-        _events = Collapse(await _traces.GetTraceAsync(summary.ExecutionId, _lifetime.Token));
-        _selectedAction = _events.FirstOrDefault();
+        _events = collapsed;
+        _model = model;
+        _metrics = metrics;
+        _selectedActionId = null;
+        _selectedFeedback = null;
+        _listRowsShown = 0;
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             RenderHistory();
-            RenderMetrics();
-            RenderGraph();
-            RenderList();
+            _scene.SetMetrics(metrics);
+            RenderLegend();
+            ApplyFilterAndRender(preserveSelection: false);
+            _scene.SetStatus($"{Truncate(summary.PromptSummary, 70)} · {collapsed.Count} steps recorded"
+                + (trace.Count > collapsed.Count ? $" ({trace.Count} raw updates collapsed)" : string.Empty));
         });
         await RenderDetailsAsync();
     }
 
-    private static IReadOnlyList<ExecutionEvent> Collapse(IReadOnlyList<ExecutionEvent> events) => events
-        .GroupBy(item => item.ActionId)
-        .Select(group => group.OrderByDescending(item => item.Timestamp).First())
-        .OrderBy(item => item.StartedAt ?? item.Timestamp)
-        .ThenBy(item => item.Timestamp)
-        .ToArray();
-
-    private void RenderMetrics()
+    private void RenderLegend()
     {
-        SummaryMetrics.Children.Clear();
-        var metrics = new[]
-        {
-            $"Steps {_events.Count}",
-            $"Tools {_events.Count(item => item.ActionType is ExecutionActionType.ToolCall or ExecutionActionType.PluginCall or ExecutionActionType.McpCall)}",
-            $"Apps {_events.Where(item => item.ComponentId is not null).Select(item => item.ComponentId).Distinct(StringComparer.OrdinalIgnoreCase).Count()}",
-            $"Retries {_events.Count(item => item.ActionType == ExecutionActionType.Retry || item.RetryOfActionId is not null)}",
-            $"Time {FormatDuration(_selectedExecution?.Duration ?? TimeSpan.Zero)}"
-        };
-        foreach (var metric in metrics)
-            SummaryMetrics.Children.Add(new Border { Padding = new Thickness(10, 5), Margin = new Thickness(0, 0, 6, 4), CornerRadius = new CornerRadius(12), Child = new TextBlock { Text = metric, FontWeight = FontWeight.Bold, FontSize = 11 } });
+        var categories = _model.Nodes.Select(node => node.Category).Distinct().OrderBy(category => (int)category).ToArray();
+        _scene.SetLegend(categories, _model.TimeMode, _model.Nodes.Count);
     }
 
-    private void RenderGraph()
+    /// <summary>Status filters reshape graph/list projections only; metric cards stay execution-truth.</summary>
+    private void ApplyFilterAndRender(bool preserveSelection)
     {
-        GraphCanvas.Children.Clear();
-        EmptyState.IsVisible = _events.Count == 0;
-        if (_events.Count == 0) return;
-        var positions = LayoutGraph(_events);
-        var scale = new ScaleTransform(_zoom, _zoom);
-        GraphCanvas.RenderTransform = scale;
-        GraphCanvas.RenderTransformOrigin = RelativePoint.TopLeft;
-        GraphCanvas.Width = Math.Max(780, positions.Values.Max(point => point.X) + NodeWidth + 50);
-        GraphCanvas.Height = Math.Max(520, positions.Values.Max(point => point.Y) + NodeHeight + 50);
-        foreach (var action in _events)
-        {
-            if (action.ParentActionId is not { } parent || !positions.TryGetValue(parent, out var from)) continue;
-            var to = positions[action.ActionId];
-            GraphCanvas.Children.Add(new Line
+        var selection = preserveSelection ? _selectedActionId : null;
+        var mode = LiveMode();
+        IEnumerable<ActionGraphNode> nodes = _model.Nodes;
+        if (mode == "Completed only") nodes = nodes.Where(node => node.Status == ExecutionActionStatus.Completed);
+        else if (mode == "Failures only")
+            nodes = nodes.Where(node => node.Status == ExecutionActionStatus.Failed || IsFailureNode(node));
+        _visibleNodes = nodes.ToArray();
+        var visibleIds = _visibleNodes.Select(node => node.ActionId).ToHashSet();
+        var filtered = new ActionGraphModel(
+            _visibleNodes,
+            _model.Links.Where(link => visibleIds.Contains(link.FromActionId) && visibleIds.Contains(link.ToActionId)).ToArray(),
+            _model.RulerTicks,
+            _model.TimeMode,
+            _model.ExtentWidth);
+        _surface.SetGraph(filtered, selection);
+        _scene.SetZoomPercent(_surface.Zoom);
+        RebuildListRows(reset: true);
+        UpdateEmptyState();
+    }
+
+    private static bool IsFailureNode(ActionGraphNode node) =>
+        node.Status == ExecutionActionStatus.Failed || node.Category == ActionGraphCategory.Blocked;
+
+    private void UpdateEmptyState()
+    {
+        var visible = _events.Count > 0 && (_visibleNodes.Count > 0 || !_graphView);
+        _scene.EmptyStateText.SetValue(HavenProperties.Visibility, visible ? HavenVisibility.Collapsed : HavenVisibility.Visible);
+        _scene.EmptyStateText.Content = _events.Count == 0
+            ? "No execution trace is available yet."
+            : LiveMode() switch
             {
-                StartPoint = new Point(from.X + NodeWidth, from.Y + NodeHeight / 2),
-                EndPoint = new Point(to.X, to.Y + NodeHeight / 2),
-                Stroke = Brush("HavenBorderSubtleBrush", Brushes.Gray),
-                StrokeThickness = action.RetryOfActionId is null ? 2 : 3
-            });
-        }
-        foreach (var action in _events)
-        {
-            var selected = _selectedAction?.ActionId == action.ActionId;
-            var panel = new StackPanel { Spacing = 4 };
-            panel.Children.Add(new TextBlock { Text = StatusGlyph(action.Status) + " " + action.Name, FontWeight = FontWeight.ExtraBold, TextWrapping = TextWrapping.Wrap, MaxHeight = 42 });
-            panel.Children.Add(new TextBlock { Text = action.ActionType.ToString(), Classes = { "muted" }, FontSize = 10 });
-            panel.Children.Add(new TextBlock { Text = Truncate(action.SafeReasoningSummary ?? action.SafeDetail ?? action.Failure?.Title ?? string.Empty, 90), Classes = { "muted" }, TextWrapping = TextWrapping.Wrap, MaxHeight = 32 });
-            if (selected)
-            {
-                var quick = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-                quick.Children.Add(QuickFeedback("👍", ActionFeedbackRating.Positive));
-                quick.Children.Add(QuickFeedback("👎", ActionFeedbackRating.Negative));
-                panel.Children.Add(quick);
-            }
-            var node = new Border
-            {
-                Width = NodeWidth,
-                MinHeight = NodeHeight,
-                Padding = new Thickness(12),
-                CornerRadius = new CornerRadius(16),
-                BorderThickness = new Thickness(selected ? 2 : 1),
-                BorderBrush = Brush(selected ? "HavenAccentBrush" : StatusBrushKey(action.Status), Brushes.Gray),
-                Background = Brush("HavenOverlaySurfaceBrush", Brushes.Transparent),
-                Child = panel,
-                Tag = action
+                "Completed only" => "No completed steps matched this filter.",
+                "Failures only" => "No failures were recorded in this execution.",
+                _ => string.Empty
             };
-            AutomationProperties.SetName(node, $"{action.Name}, {action.Status}");
-            node.PointerPressed += OnNodePressed;
-            var point = positions[action.ActionId];
-            Avalonia.Controls.Canvas.SetLeft(node, point.X);
-            Avalonia.Controls.Canvas.SetTop(node, point.Y);
-            GraphCanvas.Children.Add(node);
-        }
     }
 
-    private HavenChipButton QuickFeedback(string label, ActionFeedbackRating rating)
-    {
-        var button = new HavenChipButton { Content = label, Padding = new Thickness(7, 2), MinWidth = 34 };
-        button.Click += async (_, _) => await SaveRatingAsync(rating);
-        return button;
-    }
+    private string LiveMode() => _scene.LiveSelect.SelectedItem ?? "Live";
 
-    private static Dictionary<Guid, Point> LayoutGraph(IReadOnlyList<ExecutionEvent> events)
+    private void ApplyLiveMode()
     {
-        var byId = events.ToDictionary(item => item.ActionId);
-        var depths = new Dictionary<Guid, int>();
-        int Depth(ExecutionEvent item, HashSet<Guid> visiting)
+        var mode = LiveMode();
+        _scene.SetStatus(mode switch
         {
-            if (depths.TryGetValue(item.ActionId, out var known)) return known;
-            if (!visiting.Add(item.ActionId) || item.ParentActionId is not { } parent || !byId.TryGetValue(parent, out var parentItem)) return depths[item.ActionId] = 0;
-            var value = 1 + Depth(parentItem, visiting);
-            visiting.Remove(item.ActionId);
-            return depths[item.ActionId] = value;
-        }
-        foreach (var item in events) Depth(item, []);
-        var positions = new Dictionary<Guid, Point>();
-        foreach (var group in events.GroupBy(item => depths[item.ActionId]).OrderBy(group => group.Key))
-        {
-            var lane = 0;
-            foreach (var item in group) positions[item.ActionId] = new Point(28 + group.Key * 282, 28 + lane++ * 146);
-        }
-        return positions;
+            "Live" => "Live: the graph follows new activity for the selected execution.",
+            "Paused" => "Paused: live updates are held; switch back to Live to follow activity.",
+            "Completed only" => "Showing completed steps only. Metric cards always describe the full execution.",
+            _ => "Showing failures only. Metric cards always describe the full execution."
+        });
+        ApplyFilterAndRender(preserveSelection: true);
     }
 
-    private void RenderList()
-    {
-        ListItems.Children.Clear();
-        var index = 0;
-        foreach (var action in _events)
-        {
-            index++;
-            var button = new HavenButton
-            {
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Content = new Grid
-                {
-                    ColumnDefinitions = new ColumnDefinitions("42,2*,1.2*,3*,Auto,Auto"),
-                    Children =
-                    {
-                        Cell(index.ToString(), 0, true),
-                        Cell(StatusGlyph(action.Status) + " " + action.Name, 1, true),
-                        Cell(action.ActionType.ToString(), 2),
-                        Cell(Truncate(action.SafeReasoningSummary ?? action.SafeDetail ?? action.Failure?.Message ?? string.Empty, 150), 3),
-                        Cell(action.Status.ToString(), 4),
-                        Cell(FormatDuration(action.Duration ?? TimeSpan.Zero), 5)
-                    }
-                }
-            };
-            button.Click += async (_, _) => await SelectActionAsync(action);
-            ListItems.Children.Add(button);
-        }
-    }
+    // ---------- Graph surface selection ----------
 
-    private static TextBlock Cell(string text, int column, bool bold = false)
+    private void OnSurfaceSelectionChanged(Guid? actionId)
     {
-        var cell = new TextBlock { Text = text, Margin = new Thickness(5), TextWrapping = TextWrapping.Wrap, FontWeight = bold ? FontWeight.Bold : FontWeight.Normal };
-        Grid.SetColumn(cell, column);
-        return cell;
-    }
-
-    private async void OnNodePressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (sender is Border { Tag: ExecutionEvent action }) await SelectActionAsync(action);
-        e.Handled = true;
-    }
-
-    private async Task SelectActionAsync(ExecutionEvent action)
-    {
-        _selectedAction = action;
-        RenderGraph();
-        await RenderDetailsAsync();
+        _selectedActionId = actionId;
+        _ = RenderDetailsAsync();
     }
 
     private async Task RenderDetailsAsync()
     {
-        var action = _selectedAction;
+        var action = _selectedActionId is { } id ? _events.FirstOrDefault(item => item.ActionId == id) : null;
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            DetailsItems.Children.Clear();
-            FeedbackPanel.IsVisible = action is not null;
-            RemediationPanel.Children.Clear();
+            ClearChildren(_scene.DetailsSections);
+            ClearChildren(_scene.FeedbackSection);
+            ClearChildren(_scene.RemediationSection);
+            DetachPersistentFeedbackControls();
             if (action is null)
             {
-                DetailsItems.Children.Add(Muted("Select a graph node or list row."));
+                AddDetailCard("Node details", _events.Count == 0
+                    ? "Select an execution on the left, then choose a step in the graph or list."
+                    : "Select a node in the graph or a row in the list to inspect what Haven did.");
                 return;
             }
-            AddDetail("Overview", $"{action.ActionType} · {action.Status}\n{action.Timestamp.LocalDateTime:g} · {FormatDuration(action.Duration ?? TimeSpan.Zero)}");
-            if (!string.IsNullOrWhiteSpace(action.SafeReasoningSummary)) AddDetail("Reasoning", action.SafeReasoningSummary!);
-            if (!string.IsNullOrWhiteSpace(action.SafeDetail)) AddDetail("Details", action.SafeDetail!);
-            if (!string.IsNullOrWhiteSpace(action.ComponentId)) AddDetail("Tool / App", action.ComponentId!);
-            AddDetail("Graph context", $"Parent: {action.ParentActionId?.ToString() ?? "none"}\nRetry of: {action.RetryOfActionId?.ToString() ?? "none"}\nRecovery of: {action.RecoveryOfActionId?.ToString() ?? "none"}");
-            AddDetail("Metadata", $"Execution ID: {action.ExecutionId}\nAction ID: {action.ActionId}\nOrigin: {action.Origin}");
-            if (action.Failure is { } failure)
-            {
-                AddDetail("Error", $"{failure.Code} — {failure.Title}\n{failure.Message}\nAttempt: {failure.Attempt}" + (failure.Recovered ? "\nRecovered automatically" : string.Empty), true);
-                if (!failure.Recovered)
-                {
-                    var fix = new HavenPrimaryButton { Content = "Fix with AI" };
-                    fix.Click += (_, _) => _fixWithAi($"Inspect and safely repair Action {action.ActionId} in Execution {action.ExecutionId}. Failure: {failure.Code} — {failure.Title}. Stay within the original permissions and task scope.");
-                    DetailsItems.Children.Add(fix);
-                }
-            }
+            RenderActionDetails(action);
         });
         if (action is null) return;
-        _selectedFeedback = await _feedback.GetAsync(action.ExecutionId, action.ActionId, _lifetime.Token);
-        await Dispatcher.UIThread.InvokeAsync(() =>
+        try
         {
-            CommentInput.Text = _selectedFeedback?.Comment ?? string.Empty;
-            DeleteFeedbackButton.IsVisible = _selectedFeedback is not null;
-        });
-        if (action.RemediationId is { } remediationId)
+            _selectedFeedback = await _feedback.GetAsync(action.ExecutionId, action.ActionId, _lifetime.Token);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { return; }
+        await Dispatcher.UIThread.InvokeAsync(RenderCurrentFeedbackSection);
+    }
+
+    private void RenderActionDetails(ExecutionEvent action)
+    {
+        var category = ActionGraphCatalog.Categorize(action.ActionType);
+
+        var overview = NewCard("ActionGraph.Details.Overview");
+        var titleRow = new Container { Name = "ActionGraph.Details.TitleRow", Layout = HavenLayout.Grid, Columns = "Auto,1fr", Rows = "Auto Auto" };
+        titleRow.SetValue(HavenProperties.Gap, HavenLength.Px(8));
+        var icon = new Icon { Name = "ActionGraph.Details.Icon", Key = ActionGraphCatalog.CategoryIcon(category) };
+        icon.SetValue(HavenProperties.Width, HavenLength.Px(22));
+        icon.SetValue(HavenProperties.Height, HavenLength.Px(22));
+        icon.SetValue(HavenProperties.Foreground, ActionGraphCatalog.CategoryToken(category));
+        icon.SetValue(HavenProperties.RowSpan, 2);
+        var name = new HavenText(action.Name) { Name = "ActionGraph.Details.Name", Level = TextLevel.H4 };
+        name.SetValue(HavenProperties.Column, 1);
+        var chips = new Container { Name = "ActionGraph.Details.Chips", Layout = HavenLayout.Horizontal };
+        chips.SetValue(HavenProperties.Gap, HavenLength.Px(6));
+        chips.SetValue(HavenProperties.Column, 1);
+        chips.SetValue(HavenProperties.Row, 1);
+        AddChip(chips, "status", ActionGraphCatalog.DescribeStatus(action.Status), ActionGraphCatalog.StatusToken(action.Status));
+        AddChip(chips, "category", ActionGraphCatalog.CategoryName(category), ActionGraphCatalog.CategoryToken(category));
+        if (action.Duration is { } duration) AddChip(chips, "duration", ActionGraphProjection.FormatDuration(duration), "TextSecondary");
+        titleRow.Add(icon);
+        titleRow.Add(name);
+        titleRow.Add(chips);
+        overview.Add(titleRow);
+
+        if (!string.IsNullOrWhiteSpace(action.SafeReasoningSummary) || !string.IsNullOrWhiteSpace(action.SafeDetail))
         {
-            var remediation = await _remediations.GetAsync(remediationId, _lifetime.Token);
-            if (remediation is not null) await Dispatcher.UIThread.InvokeAsync(() => RenderRemediation(remediation));
+            var body = action.SafeReasoningSummary is { } reasoning && action.SafeDetail is { } detail
+                ? reasoning + Environment.NewLine + Environment.NewLine + detail
+                : action.SafeReasoningSummary ?? action.SafeDetail ?? string.Empty;
+            overview.Add(Caption("Description"));
+            overview.Add(BodyText(body, "ActionGraph.Details.Description"));
+        }
+        _scene.DetailsSections.Add(overview);
+
+        if (!string.IsNullOrWhiteSpace(action.ComponentId))
+            AddDetailCard("ToolOrApp", "Tool or app", action.ComponentId);
+
+        var metadataCard = NewCard("ActionGraph.Details.Metadata");
+        metadataCard.Add(Caption("Metadata"));
+        foreach (var line in MetadataLines(action))
+        {
+            var rowText = new HavenText(line) { Level = TextLevel.Caption };
+            rowText.SetValue(HavenProperties.Foreground, "TextSecondary");
+            metadataCard.Add(rowText);
+        }
+        _scene.DetailsSections.Add(metadataCard);
+
+        var relationships = new StringBuilder();
+        relationships.AppendLine($"Parent step: {ResolveName(action.ParentActionId)}");
+        if (action.RetryOfActionId is { } retryOf) relationships.Append($"Retry of: {ResolveName(retryOf)}").AppendLine();
+        if (action.RecoveryOfActionId is { } recoveryOf) relationships.Append($"Recovery of: {ResolveName(recoveryOf)}").AppendLine();
+        AddDetailCard("Relationships", "Graph relationships", relationships.ToString().TrimEnd());
+
+        if (action.Failure is { } failure)
+        {
+            var failureCard = NewCard("ActionGraph.Details.Failure");
+            failureCard.SetValue(HavenProperties.BorderColor, "Danger");
+            failureCard.Add(Caption($"Failure · {failure.Code}"));
+            failureCard.Add(BodyText(
+                failure.Title + Environment.NewLine + failure.Message
+                + Environment.NewLine + $"Attempt {failure.Attempt}"
+                + (failure.Recovered ? Environment.NewLine + "Recovered automatically." : string.Empty),
+                "ActionGraph.Details.Failure.Body"));
+            _scene.DetailsSections.Add(failureCard);
+            if (!failure.Recovered)
+            {
+                var fix = NewButton("ActionGraph.Details.FixWithAi", "Fix with AI", ButtonVariant.Primary);
+                var capturedAction = action;
+                fix.Invoked += (_, _) => _fixWithAi(
+                    $"Inspect and safely repair Action {capturedAction.ActionId} in Execution {capturedAction.ExecutionId}. "
+                    + $"Failure: {failure.Code} — {failure.Title}. Stay within the original permissions and task scope.");
+                _scene.DetailsSections.Add(fix);
+            }
         }
     }
 
-    private void AddDetail(string heading, string body, bool danger = false)
+    private IEnumerable<string> MetadataLines(ExecutionEvent action)
     {
-        var card = new Border { Padding = new Thickness(10), CornerRadius = new CornerRadius(12), BorderThickness = new Thickness(1), BorderBrush = Brush(danger ? "HavenDangerBrush" : "HavenBorderSubtleBrush", Brushes.Gray) };
-        card.Child = new StackPanel { Spacing = 4, Children = { new TextBlock { Text = heading, FontWeight = FontWeight.ExtraBold }, new TextBlock { Text = body, TextWrapping = TextWrapping.Wrap, Classes = { "muted" } } } };
-        DetailsItems.Children.Add(card);
+        yield return $"Start time:  {(action.StartedAt ?? action.Timestamp).ToLocalTime():g}";
+        if (action.EndedAt is { } ended) yield return $"End time:  {ended.ToLocalTime():g}";
+        if (action.Duration is { } duration) yield return $"Duration:  {ActionGraphProjection.FormatDuration(duration)}";
+        yield return $"Type:  {action.ActionType}";
+        yield return $"Origin:  {action.Origin}";
+        var retryCount = _events.Count(item => item.RetryOfActionId == action.ActionId || item.RecoveryOfActionId == action.ActionId);
+        yield return $"Retries / recoveries of this step:  {retryCount}";
+        if (action.TaskId is { } taskId) yield return $"Task:  {taskId.ToString("N")[..12]}…";
+        if (action.ProjectId is { } projectId) yield return $"Project:  {projectId.ToString("N")[..12]}…";
+        if (action.SafeMetadata is { } pairs)
+            foreach (var pair in pairs.Take(12))
+                yield return $"{pair.Key}:  {pair.Value}";
+    }
+
+    private void RenderCurrentFeedbackSection()
+    {
+        var action = _selectedActionId is { } id ? _events.FirstOrDefault(item => item.ActionId == id) : null;
+        if (action is null) return;
+        var section = _scene.FeedbackSection;
+        section.Add(Caption("Your feedback"));
+        var buttons = new Container { Name = "ActionGraph.Feedback.Buttons", Layout = HavenLayout.Horizontal };
+        buttons.SetValue(HavenProperties.Gap, HavenLength.Px(6));
+        _scene.ThumbUpButton.Variant = _selectedFeedback?.Rating == ActionFeedbackRating.Positive ? ButtonVariant.Primary : ButtonVariant.Tertiary;
+        _scene.ThumbDownButton.Variant = _selectedFeedback?.Rating == ActionFeedbackRating.Negative ? ButtonVariant.Danger : ButtonVariant.Tertiary;
+        buttons.Add(_scene.ThumbUpButton);
+        buttons.Add(_scene.ThumbDownButton);
+        section.Add(buttons);
+        section.Add(_scene.CommentInput);
+        _scene.CommentInput.Text = _selectedFeedback?.Comment ?? string.Empty;
+        var actions = new Container { Name = "ActionGraph.Feedback.Actions", Layout = HavenLayout.Horizontal };
+        actions.SetValue(HavenProperties.Gap, HavenLength.Px(6));
+        actions.Add(_scene.SaveCommentButton);
+        _scene.DeleteFeedbackButton.SetValue(HavenProperties.Visibility,
+            _selectedFeedback is null ? HavenVisibility.Collapsed : HavenVisibility.Visible);
+        actions.Add(_scene.DeleteFeedbackButton);
+        section.Add(actions);
+        if (_selectedFeedback is { } feedback)
+            section.Add(BodyText($"Saved {ActionGraphProjection.FormatRelative(feedback.UpdatedAt)}", "ActionGraph.Feedback.SavedAt"));
+    }
+
+    private void DetachPersistentFeedbackControls()
+    {
+        foreach (var control in new HavenElement[] { _scene.ThumbUpButton, _scene.ThumbDownButton, _scene.CommentInput, _scene.SaveCommentButton, _scene.DeleteFeedbackButton })
+            control.Parent?.Remove(control);
     }
 
     private void RenderRemediation(RemediationRequest request)
     {
-        RemediationPanel.Children.Clear();
+        var section = _scene.RemediationSection;
+        var card = NewCard("ActionGraph.Remediation.Card");
+        card.SetValue(HavenProperties.BorderColor,
+            request.State is RemediationState.Completed or RemediationState.Cancelled ? "Border" : "Warning");
         var heading = request.State switch
         {
             RemediationState.Suspended => "Action paused",
@@ -352,33 +468,42 @@ public sealed partial class ActionGraphPage : UserControl, IDisposable
             RemediationState.Cancelled => "Action cancelled",
             RemediationState.Expired => "Action expired",
             RemediationState.Failed => "Resolution failed",
-            _ => "User Action Required"
+            _ => "User action required"
         };
-        RemediationPanel.Children.Add(new TextBlock { Text = heading, FontWeight = FontWeight.ExtraBold, FontSize = 16 });
-        RemediationPanel.Children.Add(new TextBlock { Text = request.RequestingComponentName + (request.ProviderName is null ? string.Empty : " · " + request.ProviderName), FontWeight = FontWeight.Bold });
-        RemediationPanel.Children.Add(Muted(request.Explanation + "\nStored securely by Haven where applicable."));
+        card.Add(Caption(heading));
+        card.Add(BodyText(request.RequestingComponentName + (request.ProviderName is null ? string.Empty : " · " + request.ProviderName), "ActionGraph.Remediation.Component"));
+        card.Add(BodyText(request.Explanation + Environment.NewLine + "Stored securely by Haven where applicable.", "ActionGraph.Remediation.Explanation"));
 
-        if (request.State is RemediationState.Completed or RemediationState.Cancelled or RemediationState.Expired or RemediationState.Failed) return;
+        if (request.State is RemediationState.Completed or RemediationState.Cancelled or RemediationState.Expired or RemediationState.Failed)
+        {
+            section.Add(card);
+            return;
+        }
 
         var canResumeNow = request.CanResume && _remediationCoordinator.CanResume(request.Id);
         if (request.CanResume && !canResumeNow)
-            RemediationPanel.Children.Add(Muted("Automatic resume is no longer available for this saved blocker, usually because Haven restarted. Resolve the setup issue, then retry the action from its task."));
+            card.Add(BodyText(
+                "Automatic resume is no longer available for this saved blocker, usually because Haven restarted. Resolve the setup issue, then retry the action from its task.",
+                "ActionGraph.Remediation.ResumeNote"));
 
         if (request.Type == RemediationType.SecretInput)
         {
             var input = request.RequiredInputs.FirstOrDefault();
-            var secret = new TextBox { PasswordChar = '•', PlaceholderText = input?.Label ?? "Required secret" };
+            var secret = new Input { Name = "ActionGraph.Remediation.Secret", Placeholder = input?.Label ?? "Required secret" };
+            secret.IsSecret = true;
+            secret.Accessibility.AccessibleName = input?.Label ?? "Required secret";
             secret.TextChanged += async (_, _) => await _remediationCoordinator.RecordInteractionAsync(request.Id, _lifetime.Token);
-            var save = new HavenPrimaryButton { Content = canResumeNow ? "Save Securely & Retry" : "Save Securely" };
-            save.Click += async (_, _) =>
+            var save = NewButton("ActionGraph.Remediation.SaveSecret", canResumeNow ? "Save securely & retry" : "Save securely", ButtonVariant.Primary);
+            save.Invoked += async (_, _) =>
             {
                 if (string.IsNullOrWhiteSpace(secret.Text)) return;
                 await _remediationCoordinator.SaveSecretAndResolveAsync(request.Id, input?.Key ?? "secret", secret.Text, _lifetime.Token);
                 secret.Text = string.Empty;
                 await RenderDetailsAsync();
             };
-            RemediationPanel.Children.Add(secret);
-            RemediationPanel.Children.Add(save);
+            card.Add(secret);
+            card.Add(save);
+            section.Add(card);
             return;
         }
 
@@ -386,60 +511,76 @@ public sealed partial class ActionGraphPage : UserControl, IDisposable
         {
             if (canResumeNow)
             {
-                var approve = new HavenPrimaryButton { Content = "Approve & Retry" };
-                approve.Click += async (_, _) =>
+                var approve = NewButton("ActionGraph.Remediation.Approve", "Approve & retry", ButtonVariant.Primary);
+                approve.Invoked += async (_, _) =>
                 {
                     await _remediationCoordinator.ApproveAndResolveAsync(request.Id, _lifetime.Token);
                     await RenderDetailsAsync();
                 };
-                RemediationPanel.Children.Add(approve);
+                card.Add(approve);
             }
+            section.Add(card);
             return;
         }
 
-        var open = new HavenButton
-        {
-            Content = request.Type switch
+        var open = NewButton("ActionGraph.Remediation.Open",
+            request.Type switch
             {
-                RemediationType.OAuthReconnect => "Reconnect Account",
-                RemediationType.ResourceSelection => "Select Resource",
-                _ => "Open Settings"
-            }
-        };
-        open.Click += (_, _) => _openSettings();
-        RemediationPanel.Children.Add(open);
+                RemediationType.OAuthReconnect => "Reconnect account",
+                RemediationType.ResourceSelection => "Select resource",
+                _ => "Open settings"
+            });
+        open.Invoked += (_, _) => _openSettings();
+        card.Add(open);
 
         if (canResumeNow && request.CanRetry)
         {
-            var retry = new HavenPrimaryButton { Content = "Retry" };
-            retry.Click += async (_, _) =>
+            var retry = NewButton("ActionGraph.Remediation.Retry", "Retry", ButtonVariant.Primary);
+            retry.Invoked += async (_, _) =>
             {
                 await _remediationCoordinator.RetryResolvedAsync(request.Id, _lifetime.Token);
                 await RenderDetailsAsync();
             };
-            RemediationPanel.Children.Add(retry);
+            card.Add(retry);
         }
+        section.Add(card);
     }
+
+    // ---------- Feedback persistence ----------
 
     private async Task SaveRatingAsync(ActionFeedbackRating rating)
     {
-        if (_selectedAction is not { } action) return;
+        if (_selectedActionId is not { } actionId) return;
+        var action = _events.FirstOrDefault(item => item.ActionId == actionId);
+        if (action is null) return;
         var now = DateTimeOffset.UtcNow;
-        var feedback = new ActionFeedback(_selectedFeedback?.Id ?? Guid.NewGuid(), action.ExecutionId, action.ActionId, rating,
-            _selectedFeedback?.Comment, action.ActionType.ToString(), action.ComponentId, action.SafeReasoningSummary, _selectedFeedback?.CreatedAt ?? now, now);
+        var feedback = new ActionFeedback(
+            _selectedFeedback?.Id ?? Guid.NewGuid(), action.ExecutionId, action.ActionId, rating,
+            _selectedFeedback?.Comment, action.ActionType.ToString(), action.ComponentId,
+            action.SafeReasoningSummary, _selectedFeedback?.CreatedAt ?? now, now);
         await _traces.UpsertFeedbackAsync(feedback, _lifetime.Token);
         _selectedFeedback = feedback;
+        await Dispatcher.UIThread.InvokeAsync(RenderCurrentFeedbackSection);
+        _scene.SetStatus(rating == ActionFeedbackRating.Positive ? "Marked this step as helpful." : "Marked this step as not helpful.");
     }
 
     private async Task SaveCommentAsync()
     {
-        if (_selectedAction is not { } action || string.IsNullOrWhiteSpace(CommentInput.Text)) return;
+        if (_selectedActionId is not { } actionId || string.IsNullOrWhiteSpace(_scene.CommentInput.Text)) return;
+        var action = _events.FirstOrDefault(item => item.ActionId == actionId);
+        if (action is null) return;
         var now = DateTimeOffset.UtcNow;
-        var feedback = new ActionFeedback(_selectedFeedback?.Id ?? Guid.NewGuid(), action.ExecutionId, action.ActionId, _selectedFeedback?.Rating,
-            CommentInput.Text, action.ActionType.ToString(), action.ComponentId, action.SafeReasoningSummary, _selectedFeedback?.CreatedAt ?? now, now);
+        var feedback = new ActionFeedback(
+            _selectedFeedback?.Id ?? Guid.NewGuid(), action.ExecutionId, action.ActionId, _selectedFeedback?.Rating,
+            _scene.CommentInput.Text, action.ActionType.ToString(), action.ComponentId,
+            action.SafeReasoningSummary, _selectedFeedback?.CreatedAt ?? now, now);
         await _traces.UpsertFeedbackAsync(feedback, _lifetime.Token);
         _selectedFeedback = feedback;
-        DeleteFeedbackButton.IsVisible = true;
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            RenderCurrentFeedbackSection();
+            _scene.SetStatus("Comment saved with this action.");
+        });
     }
 
     private async Task DeleteFeedbackAsync()
@@ -447,74 +588,140 @@ public sealed partial class ActionGraphPage : UserControl, IDisposable
         if (_selectedFeedback is not { } feedback) return;
         await _traces.DeleteFeedbackAsync(feedback.Id, _lifetime.Token);
         _selectedFeedback = null;
-        CommentInput.Text = string.Empty;
-        DeleteFeedbackButton.IsVisible = false;
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            RenderCurrentFeedbackSection();
+            _scene.SetStatus("Feedback removed from this action.");
+        });
     }
 
-    private void SetView(bool graph)
+    // ---------- List projection ----------
+
+    private void SetViewMode(bool graph)
     {
         _graphView = graph;
-        GraphScroll.IsVisible = graph;
-        ListScroll.IsVisible = !graph;
-        ZoomInButton.IsVisible = graph;
-        ZoomOutButton.IsVisible = graph;
-        FitButton.IsVisible = graph;
-    }
-
-    private void SetZoom(double value)
-    {
-        _zoom = Math.Clamp(value, .45, 2.25);
-        RenderGraph();
-    }
-
-    private void FitGraph()
-    {
-        if (_events.Count == 0) return;
-        _zoom = Math.Clamp(Math.Min(Math.Max(300, GraphScroll.Bounds.Width) / Math.Max(1, GraphCanvas.Width), Math.Max(300, GraphScroll.Bounds.Height) / Math.Max(1, GraphCanvas.Height)), .45, 1.25);
-        RenderGraph();
-        GraphScroll.Offset = default;
-    }
-
-    private void ApplyResponsiveLayout(double width)
-    {
-        if (width < 900)
+        _scene.SetViewMode(graph);
+        if (!graph)
         {
-            WorkspaceGrid.ColumnDefinitions = new ColumnDefinitions("0,0,*,0,0");
-            WorkspaceGrid.RowDefinitions = new RowDefinitions("*,Auto");
-            HistorySurface.IsVisible = false;
-            PlaceDetailsBelowCanvas();
-        }
-        else if (width < 1250)
-        {
-            WorkspaceGrid.ColumnDefinitions = new ColumnDefinitions("210,6,*,0,0");
-            WorkspaceGrid.RowDefinitions = new RowDefinitions("*,Auto");
-            HistorySurface.IsVisible = true;
-            PlaceDetailsBelowCanvas();
+            RebuildListRows(reset: true);
+            UpdateEmptyState();
         }
         else
         {
-            WorkspaceGrid.ColumnDefinitions = new ColumnDefinitions("250,8,*,8,330");
-            WorkspaceGrid.RowDefinitions = new RowDefinitions("*");
-            HistorySurface.IsVisible = true;
-            DetailsSurface.IsVisible = true;
-            Grid.SetColumn(DetailsSurface, 4);
-            Grid.SetRow(DetailsSurface, 0);
-            DetailsSurface.Margin = default;
-            DetailsSurface.MaxHeight = double.PositiveInfinity;
+            _scene.SetZoomPercent(_surface.Zoom);
+            UpdateEmptyState();
         }
     }
 
-    private void PlaceDetailsBelowCanvas()
+    private void RebuildListRows(bool reset)
     {
-        DetailsSurface.IsVisible = true;
-        Grid.SetColumn(DetailsSurface, 2);
-        Grid.SetRow(DetailsSurface, 1);
-        DetailsSurface.Margin = new Thickness(0, 8, 0, 0);
-        DetailsSurface.MaxHeight = 280;
+        if (reset)
+        {
+            ClearChildren(_scene.ListHost);
+            _listRowsShown = 0;
+        }
+        var nodes = _visibleNodes;
+        if (nodes.Count == 0)
+        {
+            _scene.ListHost.Add(BodyText(
+                _events.Count == 0 ? "This execution has no recorded steps yet." : "No steps match the current status filter.",
+                "ActionGraph.List.Empty"));
+            return;
+        }
+        var end = Math.Min(nodes.Count, _listRowsShown + ListPageSize);
+        for (var index = _listRowsShown; index < end; index++)
+        {
+            var node = nodes[index];
+            var row = new HavenButton
+            {
+                Name = $"ActionGraph.List.Row.{node.Ordinal}",
+                Content = $"{index + 1}.  {Truncate(node.Name, 52)}   ·   {node.TypeLabel}   ·   {ActionGraphCatalog.DescribeStatus(node.Status)}"
+                    + (node.Duration is { } duration ? $"   ·   {ActionGraphProjection.FormatDuration(duration)}" : string.Empty),
+                Variant = Equals(node.ActionId, _selectedActionId) ? ButtonVariant.Primary : ButtonVariant.Tertiary
+            };
+            row.Accessibility.AccessibleName = $"Step {index + 1}: {node.Name}, {node.TypeLabel}, {ActionGraphCatalog.DescribeStatus(node.Status)}";
+            row.SetValue(HavenProperties.MinHeight, HavenLength.Px(34));
+            var captured = node;
+            row.Invoked += (_, _) =>
+            {
+                _surface.SelectAction(captured.ActionId);
+                OnSurfaceSelectionChanged(captured.ActionId);
+            };
+            _scene.ListHost.Add(row);
+        }
+        _listRowsShown = end;
+        if (end < nodes.Count)
+        {
+            var showMore = NewButton("ActionGraph.List.ShowMore", $"Show more ({nodes.Count - end} remaining)");
+            showMore.Invoked += (_, _) => RebuildListRows(reset: false);
+            _scene.ListHost.Add(showMore);
+        }
+        else if (end < _model.Nodes.Count)
+        {
+            _scene.ListHost.Add(BodyText($"{_model.Nodes.Count - end} more steps hidden by the current status filter.", "ActionGraph.List.FilterNote"));
+        }
     }
+
+    // ---------- Export ----------
+
+    internal static string BuildExportDocument(ExecutionSummary? summary, IReadOnlyList<ExecutionEvent> events, DateTimeOffset generatedAt)
+    {
+        var model = ActionGraphProjection.BuildGraph(events);
+        var metrics = ActionGraphProjection.ComputeMetrics(summary, events);
+        return ActionGraphProjection.BuildExportJson(summary, events, model, metrics, generatedAt);
+    }
+
+    private async Task ExportAsync()
+    {
+        if (_selectedExecution is null)
+        {
+            _scene.SetStatus("Nothing to export yet — select an execution first.");
+            return;
+        }
+        var top = TopLevel.GetTopLevel(this);
+        if (top?.StorageProvider is null)
+        {
+            _scene.SetStatus("Export isn't available from this platform surface.");
+            return;
+        }
+        var file = await top.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Export execution graph",
+            SuggestedFileName = $"haven-action-graph-{_selectedExecution.ExecutionId.ToString("N")[..8]}",
+            DefaultExtension = "json",
+            FileTypeChoices = [new FilePickerFileType("JSON execution graph") { Patterns = ["*.json"] }],
+            ShowOverwritePrompt = true
+        });
+        if (file is null) return;
+        try
+        {
+            var json = BuildExportDocument(_selectedExecution, _events, DateTimeOffset.UtcNow);
+            var localPath = file.TryGetLocalPath();
+            if (!string.IsNullOrWhiteSpace(localPath))
+            {
+                await File.WriteAllTextAsync(localPath, json, _lifetime.Token);
+            }
+            else
+            {
+                await using var stream = await file.OpenWriteAsync();
+                stream.SetLength(0);
+                await using var writer = new StreamWriter(stream, Encoding.UTF8);
+                await writer.WriteAsync(json.AsMemory(), _lifetime.Token);
+            }
+            _scene.SetStatus($"Exported this execution graph ({_events.Count} steps) to {file.Name}.");
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            _scene.SetStatus("Couldn't export this graph: " + ex.Message);
+        }
+    }
+
+    // ---------- Live updates ----------
 
     private void OnEventPublished(object? sender, ExecutionEvent item)
     {
+        if (LiveMode() != "Live") return;
         if (_selectedExecution?.ExecutionId != item.ExecutionId) return;
         if (Interlocked.Exchange(ref _liveRefreshQueued, 1) == 1) return;
         Dispatcher.UIThread.Post(() =>
@@ -534,35 +741,91 @@ public sealed partial class ActionGraphPage : UserControl, IDisposable
         Interlocked.Exchange(ref _liveRefreshQueued, 0);
         try
         {
-            if (!_disposed && _selectedExecution is { } current) await SelectExecutionAsync(current);
+            if (!_disposed && _selectedExecution is { } current)
+                await ReselectPreservingSelection(current);
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
     }
 
-    private static string StatusGlyph(ExecutionActionStatus status) => status switch
+    private async Task ReselectPreservingSelection(ExecutionSummary summary)
     {
-        ExecutionActionStatus.Completed => "✓",
-        ExecutionActionStatus.Failed => "❗",
-        ExecutionActionStatus.Warning => "⚠",
-        ExecutionActionStatus.Running => "●",
-        ExecutionActionStatus.Waiting or ExecutionActionStatus.Queued => "◷",
-        ExecutionActionStatus.Suspended => "⏸",
-        ExecutionActionStatus.Cancelled => "⊘",
-        _ => "⚠"
-    };
+        var previousSelection = _selectedActionId;
+        await SelectExecutionAsync(summary);
+        if (previousSelection is { } id && _events.Any(item => item.ActionId == id))
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                _surface.SelectAction(id, reveal: false);
+                OnSurfaceSelectionChanged(id);
+            });
+    }
 
-    private static string StatusBrushKey(ExecutionActionStatus status) => status switch
+    // ---------- Small builders ----------
+
+    private static void ClearChildren(Container host) => host.Children.ToList().ForEach(child => child.Parent?.Remove(child));
+
+    private static Container NewCard(string name)
     {
-        ExecutionActionStatus.Completed => "HavenSuccessBrush",
-        ExecutionActionStatus.Failed => "HavenDangerBrush",
-        ExecutionActionStatus.Warning or ExecutionActionStatus.UserActionRequired or ExecutionActionStatus.Blocked => "HavenWarningBrush",
-        _ => "HavenBorderSubtleBrush"
-    };
+        var card = new Container { Name = name, Layout = HavenLayout.Vertical };
+        card.SetValue(HavenProperties.Background, "SurfaceRaised");
+        card.SetValue(HavenProperties.BorderColor, "Border");
+        card.SetValue(HavenProperties.BorderWidth, HavenLength.Px(1));
+        card.SetValue(HavenProperties.Radius, HavenCornerRadius.Uniform(HavenLength.Px(12)));
+        card.SetValue(HavenProperties.Padding, HavenThickness.Parse("10px"));
+        card.SetValue(HavenProperties.Gap, HavenLength.Px(5));
+        return card;
+    }
 
-    private static IBrush Brush(string key, IBrush fallback) => Avalonia.Application.Current?.TryFindResource(key, out var value) == true && value is IBrush brush ? brush : fallback;
-    private static TextBlock Muted(string text) => new() { Text = text, TextWrapping = TextWrapping.Wrap, Classes = { "muted" } };
-    private static string Truncate(string value, int maximum) => value.Length <= maximum ? value : value[..Math.Max(0, maximum - 1)] + "…";
-    private static string FormatDuration(TimeSpan value) => value.TotalMinutes >= 1 ? $"{value.TotalMinutes:0.#}m" : value.TotalSeconds >= 1 ? $"{value.TotalSeconds:0.#}s" : $"{value.TotalMilliseconds:0}ms";
+    private static HavenButton NewButton(string name, string label, ButtonVariant variant = ButtonVariant.Tertiary)
+    {
+        var button = new HavenButton { Name = name, Content = label, Variant = variant };
+        button.Accessibility.AccessibleName = label;
+        button.SetValue(HavenProperties.MinHeight, HavenLength.Px(32));
+        return button;
+    }
+
+    private void AddDetailCard(string nameSuffix, string heading, string body)
+    {
+        var card = NewCard("ActionGraph.Detail." + nameSuffix);
+        card.Add(Caption(heading));
+        card.Add(BodyText(body, card.Name + ".Body"));
+        _scene.DetailsSections.Add(card);
+    }
+
+    private static HavenText Caption(string text)
+    {
+        var caption = new HavenText(text) { Level = TextLevel.Caption };
+        caption.SetValue(HavenProperties.FontWeight, 700);
+        return caption;
+    }
+
+    private static HavenText BodyText(string text, string name)
+    {
+        var body = new HavenText(text) { Name = name, Level = TextLevel.Paragraph };
+        body.SetValue(HavenProperties.FontSize, 12.5);
+        return body;
+    }
+
+    private static void AddChip(Container host, string name, string label, string token)
+    {
+        var chip = new Container { Name = $"ActionGraph.Details.Chip.{name}", Layout = HavenLayout.Horizontal };
+        chip.SetValue(HavenProperties.Background, "SurfaceSecondary");
+        chip.SetValue(HavenProperties.Radius, HavenCornerRadius.Uniform(HavenLength.Px(9)));
+        chip.SetValue(HavenProperties.Padding, HavenThickness.Parse("7px 3px"));
+        var text = new HavenText(label) { Level = TextLevel.Caption };
+        text.SetValue(HavenProperties.Foreground, token);
+        chip.Add(text);
+        host.Add(chip);
+    }
+
+    private string ResolveName(Guid? actionId)
+    {
+        if (actionId is not { } id) return "none";
+        var node = _model.Nodes.FirstOrDefault(item => item.ActionId == id);
+        return node is null ? id.ToString("N")[..8] : Truncate(node.Name, 40);
+    }
+
+    private static string Truncate(string value, int maximum) =>
+        value.Length <= maximum ? value : value[..Math.Max(0, maximum - 1)] + "…";
 
     public void Dispose()
     {

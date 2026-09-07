@@ -1,76 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:hui="using:Haven.Desktop.HavenUI.Components"
+             xmlns:backend="using:Haven.Desktop.HavenUI.Backend"
              x:Class="Haven.Desktop.Views.Pages.ActionGraph.ActionGraphPage">
-  <Grid RowDefinitions="Auto,*" Margin="20" RowSpacing="12">
-    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-      <StackPanel>
-        <TextBlock Text="Action Graph" FontSize="30" FontWeight="ExtraBold" />
-        <TextBlock Text="See what Haven actually did to fulfil a request." Classes="muted" />
-      </StackPanel>
-      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
-        <hui:HavenChipButton x:Name="GraphViewButton" Content="Graph" />
-        <hui:HavenChipButton x:Name="ListViewButton" Content="List" />
-      </StackPanel>
-    </Grid>
-
-    <Grid x:Name="WorkspaceGrid" Grid.Row="1" ColumnDefinitions="250,8,*,8,330" MinHeight="420">
-      <hui:HavenAdaptiveSurface x:Name="HistorySurface" Padding="14" CornerRadius="18">
-        <Grid RowDefinitions="Auto,Auto,*" RowSpacing="10">
-          <TextBlock Text="Prompt history" FontSize="16" FontWeight="ExtraBold" />
-          <hui:HavenTextInput x:Name="HistorySearch" Grid.Row="1" PlaceholderText="Search executions" />
-          <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
-            <StackPanel x:Name="HistoryItems" Spacing="6" />
-          </ScrollViewer>
-        </Grid>
-      </hui:HavenAdaptiveSurface>
-
-      <GridSplitter Grid.Column="1" ResizeDirection="Columns" Background="{DynamicResource HavenBorderSubtleBrush}" />
-
-      <Grid Grid.Column="2" RowDefinitions="Auto,*" RowSpacing="10">
-        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-          <WrapPanel x:Name="SummaryMetrics" Orientation="Horizontal" />
-          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
-            <hui:HavenChipButton x:Name="ZoomOutButton" Content="−" ToolTip.Tip="Zoom out" />
-            <hui:HavenChipButton x:Name="FitButton" Content="Fit" ToolTip.Tip="Fit graph to view" />
-            <hui:HavenChipButton x:Name="ZoomInButton" Content="+" ToolTip.Tip="Zoom in" />
-          </StackPanel>
-        </Grid>
-        <Grid Grid.Row="1">
-          <ScrollViewer x:Name="GraphScroll" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-            <Canvas x:Name="GraphCanvas" MinWidth="780" MinHeight="520" />
-          </ScrollViewer>
-          <ScrollViewer x:Name="ListScroll" IsVisible="False" VerticalScrollBarVisibility="Auto">
-            <StackPanel x:Name="ListItems" Spacing="6" />
-          </ScrollViewer>
-          <TextBlock x:Name="EmptyState" Text="No execution trace is available yet." Classes="muted"
-                     HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="False" />
-        </Grid>
-      </Grid>
-
-      <GridSplitter Grid.Column="3" ResizeDirection="Columns" Background="{DynamicResource HavenBorderSubtleBrush}" />
-
-      <hui:HavenAdaptiveSurface x:Name="DetailsSurface" Grid.Column="4" Padding="16" CornerRadius="18">
-        <ScrollViewer VerticalScrollBarVisibility="Auto">
-          <StackPanel Spacing="10">
-            <TextBlock Text="Action details" FontSize="16" FontWeight="ExtraBold" />
-            <StackPanel x:Name="DetailsItems" Spacing="8" />
-            <StackPanel x:Name="FeedbackPanel" Spacing="7" IsVisible="False">
-              <TextBlock Text="Action feedback" FontWeight="Bold" />
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <hui:HavenChipButton x:Name="ThumbUpButton" Content="👍" ToolTip.Tip="Good action or decision" />
-                <hui:HavenChipButton x:Name="ThumbDownButton" Content="👎" ToolTip.Tip="Incorrect, inefficient or inappropriate here" />
-              </StackPanel>
-              <hui:HavenTextInput x:Name="CommentInput" PlaceholderText="Comment on this action" AcceptsReturn="True" MinHeight="72" />
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <hui:HavenButton x:Name="SaveCommentButton" Content="Save comment" />
-                <hui:HavenTextButton x:Name="DeleteFeedbackButton" Content="Delete" />
-              </StackPanel>
-            </StackPanel>
-            <StackPanel x:Name="RemediationPanel" Spacing="7" />
-          </StackPanel>
-        </ScrollViewer>
-      </hui:HavenAdaptiveSurface>
-    </Grid>
-  </Grid>
+  <!-- Thin platform host: all Action Graph UI is owned by the HavenUI scene (ActionGraphHavenScene). -->
+  <backend:HavenSceneControl x:Name="Scene" />
 </UserControl>
