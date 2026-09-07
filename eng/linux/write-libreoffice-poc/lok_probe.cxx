@@ -5,8 +5,6 @@
 #include <LibreOfficeKit/LibreOfficeKitInit.h>
 
 #include <algorithm>
-#include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -43,6 +41,26 @@ void fail(LibreOfficeKit* kit, const std::string& message)
     }
     std::cerr << '\n';
 }
+
+bool hasRequiredDocumentApi(LibreOfficeKitDocument* document)
+{
+    return document
+        && document->pClass
+        && LIBREOFFICEKIT_DOCUMENT_HAS(document, initializeForRendering)
+        && document->pClass->initializeForRendering
+        && LIBREOFFICEKIT_DOCUMENT_HAS(document, paintTile)
+        && document->pClass->paintTile
+        && LIBREOFFICEKIT_DOCUMENT_HAS(document, getDocumentSize)
+        && document->pClass->getDocumentSize
+        && LIBREOFFICEKIT_DOCUMENT_HAS(document, postUnoCommand)
+        && document->pClass->postUnoCommand
+        && LIBREOFFICEKIT_DOCUMENT_HAS(document, setAccessibilityState)
+        && document->pClass->setAccessibilityState
+        && LIBREOFFICEKIT_DOCUMENT_HAS(document, getA11yFocusedParagraph)
+        && document->pClass->getA11yFocusedParagraph
+        && LIBREOFFICEKIT_DOCUMENT_HAS(document, getA11yCaretPosition)
+        && document->pClass->getA11yCaretPosition;
+}
 }
 
 int main(int argc, char** argv)
@@ -53,11 +71,15 @@ int main(int argc, char** argv)
         return 64;
     }
 
-    const std::filesystem::path installPath = argv[1];
-    const std::filesystem::path profilePath = argv[2];
-    const std::filesystem::path sourcePath = argv[3];
-    const std::filesystem::path outputPath = argc >= 5 ? argv[4] : std::filesystem::path{};
-    const std::filesystem::path tilePath = argc >= 6 ? argv[5] : std::filesystem::path{};
+    const std::filesystem::path installPath(argv[1]);
+    const std::filesystem::path profilePath(argv[2]);
+    const std::filesystem::path sourcePath(argv[3]);
+    const std::filesystem::path outputPath = argc >= 5
+        ? std::filesystem::path(argv[4])
+        : std::filesystem::path{};
+    const std::filesystem::path tilePath = argc >= 6
+        ? std::filesystem::path(argv[5])
+        : std::filesystem::path{};
 
     if (!std::filesystem::is_directory(installPath))
     {
@@ -80,7 +102,7 @@ int main(int argc, char** argv)
         return 67;
     }
 
-    const auto version = LIBREOFFICEKIT_HAS(kit, getVersionInfo)
+    const auto version = LIBREOFFICEKIT_HAS(kit, getVersionInfo) && kit->pClass->getVersionInfo
         ? takeString(kit, kit->pClass->getVersionInfo(kit))
         : std::string{};
     std::cout << "LibreOfficeKit version: " << (version.empty() ? "unknown" : version) << '\n';
@@ -96,7 +118,8 @@ int main(int argc, char** argv)
         return 68;
     }
 
-    if (document->pClass->getDocumentType(document) != LOK_DOCTYPE_TEXT)
+    if (!document->pClass->getDocumentType
+        || document->pClass->getDocumentType(document) != LOK_DOCTYPE_TEXT)
     {
         std::cerr << "FAIL: loaded document is not a Writer/text document\n";
         document->pClass->destroy(document);
@@ -104,13 +127,7 @@ int main(int argc, char** argv)
         return 69;
     }
 
-    if (!LIBREOFFICEKIT_DOCUMENT_HAS(document, initializeForRendering)
-        || !LIBREOFFICEKIT_DOCUMENT_HAS(document, paintTile)
-        || !LIBREOFFICEKIT_DOCUMENT_HAS(document, getDocumentSize)
-        || !LIBREOFFICEKIT_DOCUMENT_HAS(document, postUnoCommand)
-        || !LIBREOFFICEKIT_DOCUMENT_HAS(document, setAccessibilityState)
-        || !LIBREOFFICEKIT_DOCUMENT_HAS(document, getA11yFocusedParagraph)
-        || !LIBREOFFICEKIT_DOCUMENT_HAS(document, getA11yCaretPosition))
+    if (!hasRequiredDocumentApi(document))
     {
         std::cerr << "FAIL: required unstable LibreOfficeKit Writer API members are unavailable\n";
         document->pClass->destroy(document);
@@ -159,7 +176,7 @@ int main(int argc, char** argv)
         std::cout << "Rendered raw 512x512x4 tile: " << tilePath << '\n';
     }
 
-    const int viewId = LIBREOFFICEKIT_DOCUMENT_HAS(document, getView)
+    const int viewId = LIBREOFFICEKIT_DOCUMENT_HAS(document, getView) && document->pClass->getView
         ? document->pClass->getView(document)
         : 0;
     document->pClass->setAccessibilityState(document, viewId, true);
@@ -174,7 +191,8 @@ int main(int argc, char** argv)
     if (!outputPath.empty())
     {
         const auto outputUrl = fileUrl(outputPath);
-        if (!document->pClass->saveAs(document, outputUrl.c_str(), nullptr, nullptr))
+        if (!document->pClass->saveAs
+            || !document->pClass->saveAs(document, outputUrl.c_str(), nullptr, nullptr))
         {
             fail(kit, "saveAs failed");
             document->pClass->destroy(document);
