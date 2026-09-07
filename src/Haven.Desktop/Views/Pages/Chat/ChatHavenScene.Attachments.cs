@@ -16,9 +16,10 @@ internal sealed partial class ChatHavenScene
         add
         {
             // NewChatPage subscribes while wiring the canonical Chat scene. Use that guaranteed
-            // initialization point to install the queue-aware send handler without weakening or
+            // initialization point to install the composer QoL hooks without weakening or
             // duplicating the current ChatSessionService send pipeline.
             EnsureQueuedSendingEnabled();
+            EnsureThreadSettingsEnabled();
             _attachmentRemoveRequested += value;
         }
         remove => _attachmentRemoveRequested -= value;
