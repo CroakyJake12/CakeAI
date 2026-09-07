@@ -6,7 +6,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
-MARKER = "HAVEN_WRITE_LOK_SEMANTIC_PROOF_20260907"
+DEFAULT_MARKER = "HAVEN_WRITE_LOK_SEMANTIC_PROOF_20260907"
 BOLD_VALUES = {"bold", "700", "800", "900"}
 
 
@@ -60,9 +60,11 @@ def resolves_bold(
     return bool(parent and resolves_bold(parent, styles, seen))
 
 
-def verify(path: Path) -> None:
+def verify(path: Path, marker: str) -> None:
     if not path.is_file() or path.stat().st_size == 0:
         raise SystemExit(f"FAIL: semantic ODT is missing or empty: {path}")
+    if not marker:
+        raise SystemExit("FAIL: proof marker must not be empty")
 
     with ZipFile(path) as archive:
         members = set(archive.namelist())
@@ -74,15 +76,15 @@ def verify(path: Path) -> None:
             roots.append(ET.fromstring(archive.read("styles.xml")))
 
     content_text = content_bytes.decode("utf-8")
-    if MARKER not in content_text:
-        raise SystemExit("FAIL: semantic proof marker did not persist in content.xml")
+    if marker not in content_text:
+        raise SystemExit(f"FAIL: proof marker {marker!r} did not persist in content.xml")
 
     styles = style_definitions(roots)
     content_root = roots[0]
     marker_style: str | None = None
 
     for element in content_root.iter():
-        if MARKER not in "".join(element.itertext()):
+        if marker not in "".join(element.itertext()):
             continue
         style_name = attribute(element, "style-name")
         if style_name and resolves_bold(style_name, styles):
@@ -91,17 +93,18 @@ def verify(path: Path) -> None:
 
     if not marker_style:
         raise SystemExit(
-            "FAIL: semantic marker persisted, but no bold style could be resolved for an element containing it"
+            f"FAIL: marker {marker!r} persisted, but no bold style could be resolved for an element containing it"
         )
 
-    print(f"PASS: semantic marker persisted with resolved bold style {marker_style!r}")
+    print(f"PASS: marker {marker!r} persisted with resolved bold style {marker_style!r}")
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: verify-semantic-odt.py <semantic-output.odt>", file=sys.stderr)
+    if len(sys.argv) not in (2, 3):
+        print("usage: verify-semantic-odt.py <output.odt> [marker]", file=sys.stderr)
         return 64
-    verify(Path(sys.argv[1]))
+    marker = sys.argv[2] if len(sys.argv) == 3 else DEFAULT_MARKER
+    verify(Path(sys.argv[1]), marker)
     return 0
 
 
