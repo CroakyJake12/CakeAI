@@ -82,7 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/write-libreoffice-poc
-          for probe in lok_probe lok_semantic_probe; do
+          for probe in lok_probe lok_semantic_probe haven_write_engine_poc haven_write_engine_client; do
             c++ \
               -std=c++20 \
               -Wall -Wextra -Wpedantic -Werror \
@@ -95,6 +95,9 @@ jobs:
           done
           cp eng/linux/write-libreoffice-poc/verify-semantic-odt.py \
             artifacts/write-libreoffice-poc/verify-semantic-odt.py
+          cp eng/linux/write-libreoffice-poc/run-ipc-probe.sh \
+            artifacts/write-libreoffice-poc/run-ipc-probe.sh
+          chmod 0755 artifacts/write-libreoffice-poc/run-ipc-probe.sh
 
       - name: Upload standalone native probes
         uses: actions/upload-artifact@v7
@@ -186,6 +189,30 @@ jobs:
           python3 eng/linux/write-libreoffice-poc/verify-semantic-odt.py \
             /tmp/haven-write-semantic-roundtrip.odt
 
+      - name: Execute isolated helper IPC proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          io_root=/tmp/haven-write-ipc-io
+          rm -rf "$io_root" /tmp/haven-write-engine-ipc-poc
+          mkdir -p "$io_root"
+          cp /tmp/haven-write-fixture.odt "$io_root/source.odt"
+          ENGINE_BINARY="$PWD/artifacts/write-libreoffice-poc/haven_write_engine_poc" \
+          CLIENT_BINARY="$PWD/artifacts/write-libreoffice-poc/haven_write_engine_client" \
+          IPC_WORK_DIR=/tmp/haven-write-engine-ipc-poc \
+            bash eng/linux/write-libreoffice-poc/run-ipc-probe.sh \
+              "$io_root/source.odt" \
+              "$io_root/roundtrip.odt" \
+              "$io_root"
+
+      - name: Verify helper IPC Bold persistence independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 eng/linux/write-libreoffice-poc/verify-semantic-odt.py \
+            /tmp/haven-write-ipc-io/roundtrip.odt \
+            HAVEN_WRITE_LOK_IPC_PROOF_20260907
+
       - name: Record probe evidence summary
         if: always()
         shell: bash
@@ -210,6 +237,11 @@ jobs:
             else
               echo '- Callback-driven semantic output: not proven.'
             fi
+            if [[ -s /tmp/haven-write-ipc-io/roundtrip.odt ]]; then
+              echo '- Isolated helper Unix-socket IPC output: produced and independently verified.'
+            else
+              echo '- Isolated helper IPC output: not proven.'
+            fi
             echo '- Approved VM/package-image/runtime proof remains a separate gate.'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -232,7 +264,10 @@ jobs:
           set -euo pipefail
           chmod 0755 \
             artifacts/write-libreoffice-poc/lok_probe \
-            artifacts/write-libreoffice-poc/lok_semantic_probe
+            artifacts/write-libreoffice-poc/lok_semantic_probe \
+            artifacts/write-libreoffice-poc/haven_write_engine_poc \
+            artifacts/write-libreoffice-poc/haven_write_engine_client \
+            artifacts/write-libreoffice-poc/run-ipc-probe.sh
           mkdir -p "$RUNNER_TEMP/haven-write-runtime-only"
           python3 - <<'PY'
           import os
@@ -300,7 +335,7 @@ jobs:
               fi
 
               test -f /usr/lib/libreoffice/program/libmergedlo.so -o -f /usr/lib/libreoffice/program/libsofficeapp.so
-              for probe in lok_probe lok_semantic_probe; do
+              for probe in lok_probe lok_semantic_probe haven_write_engine_poc haven_write_engine_client; do
                 ldd "/probe/$probe" | tee "/io/${probe}-ldd.txt"
                 if ldd "/probe/$probe" | grep -Eiq "gtk|lokdocview|libreofficekitgtk"; then
                   echo "FAIL: prebuilt $probe has a direct GTK/LOKDocView dependency" >&2
@@ -327,6 +362,15 @@ jobs:
                 /io/source.odt \
                 /io/semantic-roundtrip.odt
               test -s /io/semantic-roundtrip.odt
+
+              ENGINE_BINARY=/probe/haven_write_engine_poc \
+              CLIENT_BINARY=/probe/haven_write_engine_client \
+              IPC_WORK_DIR=/tmp/haven-write-engine-ipc-poc \
+                bash /probe/run-ipc-probe.sh \
+                  /io/source.odt \
+                  /io/ipc-roundtrip.odt \
+                  /io
+              test -s /io/ipc-roundtrip.odt
 
               dpkg-query -W -f="\${Package}\t\${Version}\n" \
                 libreoffice-core-nogui \
@@ -355,6 +399,9 @@ jobs:
 
           python3 artifacts/write-libreoffice-poc/verify-semantic-odt.py \
             "$RUNNER_TEMP/haven-write-runtime-only/semantic-roundtrip.odt"
+          python3 artifacts/write-libreoffice-poc/verify-semantic-odt.py \
+            "$RUNNER_TEMP/haven-write-runtime-only/ipc-roundtrip.odt" \
+            HAVEN_WRITE_LOK_IPC_PROOF_20260907
 
       - name: Record runtime-only evidence summary
         if: always()
@@ -364,7 +411,7 @@ jobs:
             echo '### Headless runtime-only package proof'
             echo
             echo '- Environment: disposable minimal `ubuntu:24.04` container on GitHub-hosted CI.'
-            echo '- Probes: prebuilt in the preceding job; no compiler or LibreOfficeKit headers installed here.'
+            echo '- Probes/helper/client: prebuilt in the preceding job; no compiler or LibreOfficeKit headers installed here.'
             if [[ -s "$RUNNER_TEMP/haven-write-runtime-only/runtime-package-versions.txt" ]]; then
               echo '- Runtime packages:'
               echo '```text'
@@ -380,6 +427,11 @@ jobs:
               echo '- Callback-driven SelectAll/Bold semantic output: produced and independently verified.'
             else
               echo '- Callback-driven semantic output: not proven.'
+            fi
+            if [[ -s "$RUNNER_TEMP/haven-write-runtime-only/ipc-roundtrip.odt" ]]; then
+              echo '- Prebuilt helper Unix-socket IPC output: produced and independently verified.'
+            else
+              echo '- Prebuilt helper IPC output: not proven.'
             fi
             echo '- This remains portable Linux evidence, not approved CakeOS VM/image proof.'
           } >> "$GITHUB_STEP_SUMMARY"
