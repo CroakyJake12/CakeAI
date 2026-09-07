@@ -1,0 +1,98 @@
+﻿STATUS
+ M src/Haven.Desktop/Views/Shell/TopRail/ActionsFlyoutFinalScene.cs
+ M src/Haven.Desktop/Views/Shell/TopRail/AppLauncherFinalScene.cs
+ M src/Haven.Desktop/Views/Shell/TopRail/NotificationCentre.cs
+ M src/Haven.Desktop/Views/Shell/TopRail/UniversalSearchControl.axaml
+ M src/Haven.Desktop/Views/Shell/TopRail/UniversalSearchControl.axaml.cs
+DIFF
+diff --git a/src/Haven.Desktop/Views/Shell/TopRail/ActionsFlyoutFinalScene.cs b/src/Haven.Desktop/Views/Shell/TopRail/ActionsFlyoutFinalScene.cs
+index dbf9da9..2ff5136 100644
+--- a/src/Haven.Desktop/Views/Shell/TopRail/ActionsFlyoutFinalScene.cs
++++ b/src/Haven.Desktop/Views/Shell/TopRail/ActionsFlyoutFinalScene.cs
+@@ -67,7 +67,7 @@ internal sealed class ActionsFlyoutFinalScene
+ 
+         _sections = new Container { Name = "HeaderDropdown.Actions.Sections", Layout = HavenLayout.Vertical };
+         _sections.SetValue(HavenProperties.Width, HavenLength.Percent(100));
+-        _sections.SetValue(HavenProperties.Height, HavenLength.Fr(1));
++        _sections.SetValue(HavenProperties.Height, HavenLength.Px(412));
+         _sections.SetValue(HavenProperties.Overflow, HavenOverflow.Scroll);
+         _sections.SetValue(HavenProperties.Clip, true);
+         _sections.SetValue(HavenProperties.Gap, HavenLength.Px(16));
+diff --git a/src/Haven.Desktop/Views/Shell/TopRail/AppLauncherFinalScene.cs b/src/Haven.Desktop/Views/Shell/TopRail/AppLauncherFinalScene.cs
+index 409fa13..983b107 100644
+--- a/src/Haven.Desktop/Views/Shell/TopRail/AppLauncherFinalScene.cs
++++ b/src/Haven.Desktop/Views/Shell/TopRail/AppLauncherFinalScene.cs
+@@ -63,7 +63,7 @@ internal sealed class AppLauncherFinalScene
+ 
+         _sections = new Container { Name = "HeaderDropdown.Apps.Sections", Layout = HavenLayout.Vertical };
+         _sections.SetValue(HavenProperties.Width, HavenLength.Percent(100));
+-        _sections.SetValue(HavenProperties.Height, HavenLength.Fr(1));
++        _sections.SetValue(HavenProperties.Height, HavenLength.Px(382));
+         _sections.SetValue(HavenProperties.Overflow, HavenOverflow.Scroll);
+         _sections.SetValue(HavenProperties.Clip, true);
+         _sections.SetValue(HavenProperties.Gap, HavenLength.Px(16));
+diff --git a/src/Haven.Desktop/Views/Shell/TopRail/NotificationCentre.cs b/src/Haven.Desktop/Views/Shell/TopRail/NotificationCentre.cs
+index a004d56..cdc68e8 100644
+--- a/src/Haven.Desktop/Views/Shell/TopRail/NotificationCentre.cs
++++ b/src/Haven.Desktop/Views/Shell/TopRail/NotificationCentre.cs
+@@ -110,6 +110,7 @@ public sealed class NotificationCentre : Grid, IDisposable
+                 _searchBox,
+                 new ScrollViewer
+                 {
++                    MaxHeight = 320,
+                     VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                     HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+                     Content = new StackPanel
+@@ -118,7 +119,7 @@ public sealed class NotificationCentre : Grid, IDisposable
+                         Children = { _prioritySection, _unreadSection, _emptyState }
+                     }
+                 },
+-                new HavenAdaptiveSurface { Height = 1, Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)) },
++                new HavenAdaptiveSurface { Height = 1, Background = ResourceBrush("HavenLineBrush", Color.FromArgb(30, 0, 0, 0)) },
+                 _settingsButton
+             }
+         };
+diff --git a/src/Haven.Desktop/Views/Shell/TopRail/UniversalSearchControl.axaml b/src/Haven.Desktop/Views/Shell/TopRail/UniversalSearchControl.axaml
+index ab1c606..e622252 100644
+--- a/src/Haven.Desktop/Views/Shell/TopRail/UniversalSearchControl.axaml
++++ b/src/Haven.Desktop/Views/Shell/TopRail/UniversalSearchControl.axaml
+@@ -3,7 +3,7 @@
+              xmlns:hui="using:Haven.Desktop.HavenUI.Components"
+              xmlns:controls="using:Haven.Desktop.Controls"
+              x:Class="Haven.Desktop.Views.Shell.TopRail.UniversalSearchControl">
+-  <StackPanel Spacing="9">
++  <StackPanel Spacing="12">
+     <hui:HavenAdaptiveSurface Background="{DynamicResource HavenElevatedBrush}"
+             BorderBrush="{DynamicResource HavenLineBrush}"
+             BorderThickness="1"
+@@ -32,7 +32,7 @@
+             BorderThickness="1"
+             CornerRadius="24"
+             Padding="15">
+-      <ScrollViewer MaxHeight="560"
++      <ScrollViewer MaxHeight="500"
+                     HorizontalScrollBarVisibility="Disabled"
+                     VerticalScrollBarVisibility="Auto">
+         <StackPanel x:Name="ResultsPanel" Spacing="5"/>
+diff --git a/src/Haven.Desktop/Views/Shell/TopRail/UniversalSearchControl.axaml.cs b/src/Haven.Desktop/Views/Shell/TopRail/UniversalSearchControl.axaml.cs
+index b07f9cc..2a7044b 100644
+--- a/src/Haven.Desktop/Views/Shell/TopRail/UniversalSearchControl.axaml.cs
++++ b/src/Haven.Desktop/Views/Shell/TopRail/UniversalSearchControl.axaml.cs
+@@ -151,7 +151,7 @@ public sealed partial class UniversalSearchControl : UserControl
+         });
+         var detail = item.IsEnabled || string.IsNullOrWhiteSpace(item.DisabledReason)
+             ? item.Detail
+-            : $"{item.Detail} ├é┬À {item.DisabledReason}";
++            : $"{item.Detail} ┬À {item.DisabledReason}";
+         var copy = new StackPanel
+         {
+             Spacing = 1,
+@@ -172,7 +172,7 @@ public sealed partial class UniversalSearchControl : UserControl
+                 Padding = new Thickness(10, 4),
+                 Child = new TextBlock
+                 {
+-                    Text = item.IsEnabled ? item.KindLabel : $"{item.KindLabel} ├é┬À unavailable",
++                    Text = item.IsEnabled ? item.KindLabel : $"{item.KindLabel} ┬À unavailable",
+                     FontSize = 10,
+                     FontWeight = FontWeight.Bold
+                 }

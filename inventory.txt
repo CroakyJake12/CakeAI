@@ -1,0 +1,37 @@
+﻿=== BRANCH/HEAD ===
+worker07/system-ui-top-rail-20260825
+856b29b57881ebe1f195428fcec7ef483f68cf0d
+=== TARGET FILE NAMES ===
+src\Haven.Desktop\Controls\ModelConfigurationControl.cs
+src\Haven.Desktop\Views\Shell\TopRail\ActionsFlyoutControl.cs
+src\Haven.Desktop\Views\Shell\TopRail\ActionsFlyoutFinalScene.cs
+src\Haven.Desktop\Views\Shell\TopRail\AppLauncherControl.AvaloniaAlias.cs
+src\Haven.Desktop\Views\Shell\TopRail\AppLauncherControl.axaml
+src\Haven.Desktop\Views\Shell\TopRail\AppLauncherControl.axaml.cs
+src\Haven.Desktop\Views\Shell\TopRail\AppLauncherFinalScene.cs
+src\Haven.Desktop\Views\Shell\TopRail\AppLauncherFlyout.cs
+src\Haven.Desktop\Views\Shell\TopRail\NotificationCentre.cs
+src\Haven.Desktop\Views\Shell\TopRail\TopRail.axaml
+src\Haven.Desktop\Views\Shell\TopRail\TopRail.axaml.cs
+src\Haven.Desktop\Views\Shell\TopRail\TopRail.HavenScene.cs
+src\Haven.Desktop\Views\Shell\TopRail\TopRail.SemanticActions.cs
+src\Haven.Desktop\Views\Shell\TopRail\TopRail.Tasks.cs
+src\Haven.Desktop\Views\Shell\TopRail\TopRailFinalScene.cs
+src\Haven.Desktop\Views\Shell\TopRail\UniversalSearchControl.axaml
+src\Haven.Desktop\Views\Shell\TopRail\UniversalSearchControl.axaml.cs
+=== CLASS REFERENCES ===
+-- class AppLauncherControl
+src\Haven.Desktop\Views\Shell\TopRail\AppLauncherControl.AvaloniaAlias.cs:3: public sealed partial class AppLauncherControl
+src\Haven.Desktop\Views\Shell\TopRail\AppLauncherControl.axaml.cs:16: public sealed partial class AppLauncherControl : UserControl
+-- class UniversalSearchControl
+src\Haven.Desktop\Views\Shell\TopRail\UniversalSearchControl.axaml.cs:11: public sealed partial class UniversalSearchControl : UserControl
+-- class NotificationCentre
+src\Haven.Desktop\Views\Shell\TopRail\NotificationCentre.cs:18: public sealed class NotificationCentre : Grid, IDisposable
+-- class ModelConfigurationControl
+src\Haven.Desktop\Controls\ModelConfigurationControl.cs:32: public sealed class ModelConfigurationControl : UserControl, IDisposable
+-- HavenModelPickerButton
+src\Haven.Desktop\HavenUI\Components\Buttons\HavenButtons.cs:167: public sealed class HavenModelPickerButton : HavenButtonBase
+src\Haven.Desktop\HavenUI\Components\Buttons\HavenButtons.cs:170: AvaloniaProperty.Register<HavenModelPickerButton, int>(nameof(EffortPercentage), 60);
+src\Haven.Desktop\HavenUI\Components\Buttons\HavenButtons.cs:172: public HavenModelPickerButton() : base("havenModelPicker") => ApplyEffort(EffortPercentage);
+src\Haven.Desktop\HavenUI\Registry\HavenUiComponentRegistry.cs:64: yield return Action<HavenModelPickerButton>("HavenModelPicker", "ReasoningOverride", "Reasoning-aware model selector");
+src\Haven.Desktop\Views\Shell\TopRail\TopRail.axaml:27: <hui:HavenModelPickerButton x:Name="UniversalModelButton" Grid.Column="6" MinWidth="176" MaxWidth="236"><StackPanel Orientation="Horizontal" Spacing="6"><controls:HavenIcon IconKey="cpu" Width="17" Height="17" /><TextBlock x:Name="UniversalModelName" Text="Local model" FontWeight="ExtraBold" FontSize="12" MaxWidth="116" TextTrimming="CharacterEllipsis" /><TextBlock Text="·" /><TextBlock x:Name="UniversalReasoningValue" Text="60%" FontWeight="ExtraBold" FontSize="12" /><controls:HavenIcon IconKey="chevron-down" Width="10" Height="10" /></StackPanel></hui:HavenModelPickerButton>

@@ -1,0 +1,5 @@
+﻿HEAD 9947dd7e8eb155f7159647a2fdf59f8f2e28cd8f STATUS
+COMMITS
+9947dd7 Expose notification settings handoff
+0dea9d2 Keep notification controls reachable while filtering
+7c3c874 Fix top rail dropdown viewport sizing

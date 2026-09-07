@@ -1,0 +1,26 @@
+﻿=== ActionsFlyoutFinalScene ===
+=== AppLauncherFinalScene ===
+=== UniversalSearchControl ===
+tests\Haven.Desktop.Tests\UniversalSearchControlTests.cs:5: public sealed class UniversalSearchControlTests
+tests\Haven.Desktop.Tests\UniversalSearchControlTests.cs:17: Assert.Single(UniversalSearchControl.FilterItems(items, "workspace source"));
+tests\Haven.Desktop.Tests\UniversalSearchControlTests.cs:18: Assert.Single(UniversalSearchControl.FilterItems(items, "document"));
+tests\Haven.Desktop.Tests\UniversalSearchControlTests.cs:19: Assert.Single(UniversalSearchControl.FilterItems(items, "Ctrl+S"));
+tests\Haven.Desktop.Tests\UniversalSearchControlTests.cs:20: Assert.Equal(3, UniversalSearchControl.FilterItems(items, string.Empty).Count);
+tests\Haven.Desktop.Tests\UniversalSearchControlTests.cs:33: Assert.Equal(1, UniversalSearchControl.MoveSelectionIndex(items, -1, 1));
+tests\Haven.Desktop.Tests\UniversalSearchControlTests.cs:34: Assert.Equal(2, UniversalSearchControl.MoveSelectionIndex(items, 1, 1));
+tests\Haven.Desktop.Tests\UniversalSearchControlTests.cs:35: Assert.Equal(1, UniversalSearchControl.MoveSelectionIndex(items, 2, 1));
+tests\Haven.Desktop.Tests\UniversalSearchControlTests.cs:36: Assert.Equal(2, UniversalSearchControl.MoveSelectionIndex(items, 1, -1));
+tests\Haven.Desktop.Tests\UniversalSearchControlTests.cs:48: Assert.Equal(-1, UniversalSearchControl.MoveSelectionIndex(items, -1, 1));
+=== NotificationCentre ===
+=== TopRailFinalScene ===
+tests\Haven.Desktop.Tests\TopRailActionsLabelTests.cs:18: var scene = Assert.IsType<TopRailFinalScene>(rail.HavenOwnedScene);
+tests\Haven.Desktop.Tests\TopRailRegressionCorrectionTests.cs:19: var scene = Assert.IsType<TopRailFinalScene>(rail.HavenOwnedScene);
+tests\Haven.Desktop.Tests\TopRailVisualPolicyTests.cs:80: var scene = Assert.IsType<TopRailFinalScene>(rail.HavenOwnedScene);
+tests\Haven.Desktop.Tests\TopRailVisualPolicyTests.cs:113: var scene = Assert.IsType<TopRailFinalScene>(rail.HavenOwnedScene);
+tests\Haven.Desktop.Tests\TopRailVisualPolicyTests.cs:176: var scene = Assert.IsType<TopRailFinalScene>(rail.HavenOwnedScene);
+=== ModelConfigurationControl ===
+tests\Haven.Desktop.Tests\ModelConfigurationControlTests.cs:3: * Where: tests/Haven.Desktop.Tests/ModelConfigurationControlTests.cs, in the automated test suite, where executable examples protect behavior against regressions.
+tests\Haven.Desktop.Tests\ModelConfigurationControlTests.cs:4: * What: This file owns ModelConfigurationControlTests. Read the type and member comments below as a map of each responsibility.
+tests\Haven.Desktop.Tests\ModelConfigurationControlTests.cs:20: public sealed class ModelConfigurationControlTests
+tests\Haven.Desktop.Tests\ModelConfigurationControlTests.cs:32: Assert.Equal(expected, ModelConfigurationControl.SimplifyModelName(raw));
+tests\Haven.Desktop.Tests\ModelConfigurationControlTests.cs:41: using var control = new ModelConfigurationControl();

@@ -1,0 +1,16 @@
+﻿HEAD 9947dd7e8eb155f7159647a2fdf59f8f2e28cd8f STATUS
+?? .w07-a.tmp
+?? .w07-b.tmp
+?? .w07-c.tmp
+COMMITS
+9947dd7 (HEAD -> worker07/system-ui-top-rail-20260825) Expose notification settings handoff
+0dea9d2 Keep notification controls reachable while filtering
+7c3c874 Fix top rail dropdown viewport sizing
+856b29b (origin/main, origin/HEAD, worker07/system-ui-top-rail-registered-20260825, main, gptremote/haven/worker04-creative-maps-games-20260825, gptremote/haven/worker-chat-spaces-study-launch-20260825-b7989611e6c74d42a2c1fb4a4b28bdc3, gptremote/haven/launch-critical-mail-recovery-20260825, gptremote/haven/data-present-launch-20260825, gptremote/haven/browser-terminal-emergency-20260825-f67938afc1064b10a6efe288de13c034) test(startup): DI container guard - every infra service must resolve
+STAT
+ .../Views/Shell/TopRail/ActionsFlyoutFinalScene.cs            |  2 +-
+ .../Views/Shell/TopRail/AppLauncherFinalScene.cs              |  2 +-
+ src/Haven.Desktop/Views/Shell/TopRail/NotificationCentre.cs   | 11 +++++++++--
+ src/Haven.Desktop/Views/Shell/TopRail/TopRail.axaml.cs        |  6 ++++++
+ .../Views/Shell/TopRail/UniversalSearchControl.axaml          |  4 ++--
+ 5 files changed, 19 insertions(+), 6 deletions(-)
