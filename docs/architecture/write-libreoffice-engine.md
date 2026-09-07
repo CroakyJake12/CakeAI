@@ -30,9 +30,13 @@ LibreOffice Writer/core-nogui runtime
 
 The current `NotesDocument` editor remains the production path. Do not make Writer and `NotesDocument` simultaneous equal authorities. A later migration must choose one canonical Writer payload plus Haven-only sidecar metadata and provide an explicit importer from existing Haven documents.
 
+## LibreOfficeKit program path
+
+The path passed to `lok_init_2` must be the directory that directly contains `libsofficeapp.so` or `libmergedlo.so`; LibreOfficeKit appends one of those filenames to the supplied path. Ubuntu packages place these libraries below `/usr/lib/libreoffice/program`, which is therefore the default `LibreOfficeProgramPath` used by this PoC. Do not pass `/usr/lib/libreoffice` unless that package layout changes and direct runtime evidence confirms it.
+
 ## Security boundary
 
-The engine must fail closed. Enabling the feature is not enough to make it available: the Linux host, helper executable, LibreOffice installation, and required native libraries must all be present. A future helper process must run with an isolated profile, minimal filesystem mounts, no network by default, and no unrestricted UNO-command escape hatch exposed to generated UI or model output.
+The engine must fail closed. Enabling the feature is not enough to make it available: the Linux host, helper executable, LibreOffice program directory, and required native libraries must all be present. A future helper process must run with an isolated profile, minimal filesystem mounts, no network by default, and no unrestricted UNO-command escape hatch exposed to generated UI or model output.
 
 `WriteEngineCommand` is therefore a semantic application request. Platform implementations must allow-list/validate commands before translating them to LibreOffice UNO commands.
 
@@ -44,7 +48,7 @@ Rendered tiles are not sufficient accessibility evidence. The engine contract re
 
 `eng/linux/write-libreoffice-poc/lok_probe.cxx` exercises the minimum native API surface needed to decide whether the architecture is viable:
 
-1. initialise LibreOfficeKit with an isolated profile;
+1. initialise LibreOfficeKit from its program directory with an isolated profile;
 2. open a Writer document;
 3. verify the required unstable API members are present;
 4. obtain document dimensions;
