@@ -1,21 +1,25 @@
-using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
-using Avalonia.Interactivity;
-using Avalonia.Layout;
-using Avalonia.Media;
 using Haven.Application;
 using Haven.Core;
-using Haven.Desktop.Controls;
 using Haven.Desktop.Events;
+using Haven.Desktop.HavenUI.Backend;
 
 namespace Haven.Desktop.Views.Pages.ActivityLog;
 
-public sealed partial class ActivityLogPage : UserControl
+/// <summary>
+/// Desktop adapter that keeps Activity Log data/event behavior while rendering the
+/// surface with the canonical Haven.UI scene backend.
+/// </summary>
+public sealed partial class ActivityLogPage : UserControl, IDisposable
 {
     private readonly HavenEventBus _bus;
     private readonly IConversationRepository _conversations;
+    private readonly ActivityLogHavenScene _scene;
+    private readonly HashSet<string> _registeredItemNames = new(StringComparer.Ordinal);
     private IReadOnlyList<Conversation> _allItems = [];
     private string _searchQuery = string.Empty;
+    private bool _disposed;
 
     public ActivityLogPage(HavenEventBus bus, IConversationRepository conversations)
     {
@@ -23,35 +27,56 @@ public sealed partial class ActivityLogPage : UserControl
         _conversations = conversations;
 
         InitializeComponent();
-        WireEvents();
+        _scene = new ActivityLogHavenScene();
+        Scene = new HavenSceneControl { Root = _scene.Root };
+        AutomationProperties.SetAutomationId(this, "ActivityLogPage");
+        AutomationProperties.SetName(this, "Activity Log");
+        AutomationProperties.SetAutomationId(Scene, "ActivityLogScene");
+        AutomationProperties.SetName(Scene, "Activity Log conversations");
+        Content = Scene;
+
+        Loaded += OnLoaded;
+        Scene.PointerMoved += (_, args) => FirePointerEventAt(args.GetPosition(Scene), "Move");
+        Scene.PointerWheelChanged += (_, args) => FirePointerEventAt(args.GetPosition(Scene), "Wheel");
+        _scene.RefreshRequested += OnRefreshRequested;
+        _scene.SearchChanged += OnSearchChanged;
+        _scene.ItemInvoked += OnItemInvoked;
+        _scene.PointerEventRequested += OnPointerEventRequested;
+        _bus.RegisterElement("ActivityLog.Actions.Refresh", Scene);
     }
 
-    private void OnLoaded(object? sender, RoutedEventArgs e) => _ = RefreshAsync();
+    public HavenSceneControl Scene { get; }
 
-    private static IBrush? Brush(string key) =>
-        Avalonia.Application.Current?.TryFindResource(key, out var value) == true ? value as IBrush : null;
+    internal ActivityLogHavenScene HavenScene => _scene;
 
-    private void WireEvents()
+    private void OnLoaded(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => _ = RefreshAsync();
+
+    private async void OnRefreshRequested(object? sender, EventArgs e)
     {
-        _bus.RegisterElement("ActivityLog.Actions.Refresh", RefreshButton);
-        _bus.WirePointerEvents("ActivityLog.Actions.Refresh", RefreshButton);
-        RefreshButton.Click += async (_, _) =>
-        {
-            _bus.Fire("ActivityLog.Actions.Refresh");
-            await RefreshAsync();
-        };
+        _bus.Fire("ActivityLog.Actions.Refresh");
+        await RefreshAsync();
+    }
 
-        SearchBox.TextChanged += (_, _) =>
-        {
-            _searchQuery = SearchBox.Text?.Trim() ?? "";
-            _bus.Fire("ActivityLog.Search.QueryChanged");
-            FilterAndDisplay();
-        };
+    private void OnSearchChanged(object? sender, string query)
+    {
+        _searchQuery = query;
+        _bus.Fire("ActivityLog.Search.QueryChanged");
+        FilterAndDisplay();
+    }
+
+    private void OnItemInvoked(object? sender, string qualifiedName) => _bus.Fire($"{qualifiedName}.Click");
+
+    private void OnPointerEventRequested(object? sender, string eventName) => _bus.Fire(eventName);
+
+    private void FirePointerEventAt(Avalonia.Point point, string suffix)
+    {
+        var qualifiedName = _scene.GetQualifiedActionAt(point.X, point.Y);
+        if (qualifiedName is not null) _bus.Fire($"{qualifiedName}.{suffix}");
     }
 
     private async Task RefreshAsync()
     {
-        StatusText.Text = "Loading…";
+        _scene.SetStatus("Loading…");
         try
         {
             _allItems = await _conversations.GetRecentAsync(null, 50, CancellationToken.None);
@@ -59,72 +84,50 @@ public sealed partial class ActivityLogPage : UserControl
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Failed to load: {ex.Message}";
+            _scene.SetStatus($"Failed to load: {ex.Message}");
         }
     }
 
     private void FilterAndDisplay()
     {
-        ItemsPanel.Children.Clear();
         var items = string.IsNullOrWhiteSpace(_searchQuery)
             ? _allItems
             : _allItems.Where(c => c.Title.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase)).ToList();
 
-        foreach (var conv in items)
-            ItemsPanel.Children.Add(CreateItemCard(conv));
-
-        StatusText.Text = $"{items.Count} conversation{(items.Count == 1 ? "" : "s")}";
+        var rows = items
+            .Select(conversation => new ActivityLogRow(conversation.Title, conversation.Mode.ToString(), conversation.UpdatedAt))
+            .ToArray();
+        _scene.SetItems(rows);
+        RegisterItemNames(rows.Length);
+        _scene.SetStatus($"{rows.Length} conversation{(rows.Length == 1 ? "" : "s")}");
     }
 
-    private Button CreateItemCard(Conversation conv)
+    private void RegisterItemNames(int count)
     {
-        var qName = $"ActivityLog.List.Item{ItemsPanel.Children.Count}";
+        foreach (var qualifiedName in _registeredItemNames) _bus.UnregisterElement(qualifiedName);
+        _registeredItemNames.Clear();
 
-        var titleBlock = new TextBlock
+        for (var index = 0; index < count; index++)
         {
-            Text = conv.Title, FontWeight = FontWeight.SemiBold, FontSize = 13,
-            MaxLines = 1, TextTrimming = TextTrimming.CharacterEllipsis
-        };
-        var modeBadge = new HavenAdaptiveSurface
-        {
-            Background = Brush("StrokeBrush"),
-            CornerRadius = new CornerRadius(4), Padding = new Avalonia.Thickness(6, 2),
-            Child = new TextBlock { Text = conv.Mode.ToString(), FontSize = 10, Opacity = 0.7 }
-        };
-        var updatedText = new TextBlock
-        {
-            Text = conv.UpdatedAt.ToString("MMM dd, HH:mm"), FontSize = 10, Opacity = 0.5, VerticalAlignment = VerticalAlignment.Center
-        };
+            var qualifiedName = $"ActivityLog.List.Item{index}";
+            _registeredItemNames.Add(qualifiedName);
+            _bus.RegisterElement(qualifiedName, Scene);
+        }
+    }
 
-        var metaRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        metaRow.Children.Add(modeBadge);
-        metaRow.Children.Add(updatedText);
-
-        var headerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 8 };
-        headerGrid.Children.Add(titleBlock);
-        Grid.SetColumn(metaRow, 1);
-        headerGrid.Children.Add(metaRow);
-
-        var contentGrid = new Grid { RowDefinitions = new RowDefinitions("Auto"), ColumnDefinitions = new ColumnDefinitions("*") };
-        contentGrid.Children.Add(headerGrid);
-
-        var button = new HavenButton
-        {
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            HorizontalContentAlignment = HorizontalAlignment.Left,
-            Background = Brushes.Transparent,
-            BorderThickness = new Avalonia.Thickness(0),
-            Padding = new Avalonia.Thickness(10, 8),
-            Margin = new Avalonia.Thickness(0, 0, 0, 2),
-            Content = contentGrid
-        };
-
-        button.RegisterWithEvents(qName, _bus);
-        button.Click += (_, _) =>
-        {
-            _bus.Fire($"{qName}.Click");
-        };
-
-        return button;
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        Loaded -= OnLoaded;
+        _scene.RefreshRequested -= OnRefreshRequested;
+        _scene.SearchChanged -= OnSearchChanged;
+        _scene.ItemInvoked -= OnItemInvoked;
+        _scene.PointerEventRequested -= OnPointerEventRequested;
+        _bus.UnregisterElement("ActivityLog.Actions.Refresh");
+        foreach (var qualifiedName in _registeredItemNames) _bus.UnregisterElement(qualifiedName);
+        _registeredItemNames.Clear();
+        _scene.Dispose();
+        Scene.Root = null;
     }
 }
