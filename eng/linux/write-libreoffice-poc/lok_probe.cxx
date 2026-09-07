@@ -67,11 +67,11 @@ int main(int argc, char** argv)
 {
     if (argc < 4)
     {
-        std::cerr << "usage: lok_probe <libreoffice-install> <profile-dir> <source-document> [output-document] [tile-rgba]\n";
+        std::cerr << "usage: lok_probe <libreoffice-program-dir> <profile-dir> <source-document> [output-document] [tile-rgba]\n";
         return 64;
     }
 
-    const std::filesystem::path installPath(argv[1]);
+    const std::filesystem::path programPath(argv[1]);
     const std::filesystem::path profilePath(argv[2]);
     const std::filesystem::path sourcePath(argv[3]);
     const std::filesystem::path outputPath = argc >= 5
@@ -81,9 +81,9 @@ int main(int argc, char** argv)
         ? std::filesystem::path(argv[5])
         : std::filesystem::path{};
 
-    if (!std::filesystem::is_directory(installPath))
+    if (!std::filesystem::is_directory(programPath))
     {
-        std::cerr << "FAIL: LibreOffice installation path does not exist: " << installPath << '\n';
+        std::cerr << "FAIL: LibreOffice program directory does not exist: " << programPath << '\n';
         return 65;
     }
     if (!std::filesystem::is_regular_file(sourcePath))
@@ -95,7 +95,7 @@ int main(int argc, char** argv)
     std::filesystem::create_directories(profilePath);
     const auto profileUrl = fileUrl(profilePath);
 
-    LibreOfficeKit* kit = lok_init_2(installPath.string().c_str(), profileUrl.c_str());
+    LibreOfficeKit* kit = lok_init_2(programPath.string().c_str(), profileUrl.c_str());
     if (!kit || !kit->pClass)
     {
         std::cerr << "FAIL: lok_init_2 returned null\n";
