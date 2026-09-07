@@ -104,7 +104,7 @@ public sealed class ModelRecommendationsActivity : Activity
             Orientation = Orientation.Vertical
         };
         card.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
-        card.Background = HavenNativeSurface.Card();
+        card.Background = HavenNativeAccentPalette.Launcher.Tertiary.Create(Dp(18));
 
         card.AddView(Label(title, 17, bold: true));
         var copy = Label(detail, 13);
