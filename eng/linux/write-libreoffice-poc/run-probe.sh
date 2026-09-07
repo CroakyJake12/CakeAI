@@ -6,7 +6,7 @@ usage() {
 Usage: run-probe.sh <source-document> [output-document]
 
 Environment overrides:
-  LO_INSTALL_PATH   LibreOffice installation root (default /usr/lib/libreoffice)
+  LO_PROGRAM_PATH   LibreOffice program directory (default /usr/lib/libreoffice/program)
   CXX               C++ compiler (default c++)
   BUILD_DIR         disposable build directory (default under /tmp)
 EOF
@@ -24,7 +24,7 @@ fi
 
 source_document="$1"
 output_document="${2:-}"
-lo_install="${LO_INSTALL_PATH:-/usr/lib/libreoffice}"
+lo_program="${LO_PROGRAM_PATH:-/usr/lib/libreoffice/program}"
 cxx="${CXX:-c++}"
 build_dir="${BUILD_DIR:-/tmp/haven-write-lok-probe}"
 profile_dir="$build_dir/profile"
@@ -32,7 +32,7 @@ tile_file="$build_dir/tile.rgba"
 probe_binary="$build_dir/lok_probe"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-for path in "$source_document" "$lo_install"; do
+for path in "$source_document" "$lo_program"; do
   if [[ ! -e "$path" ]]; then
     echo "FAIL: required path does not exist: $path" >&2
     exit 66
@@ -49,8 +49,8 @@ if [[ ! -f /usr/include/LibreOfficeKit/LibreOfficeKit.h ]]; then
   exit 68
 fi
 
-if [[ ! -f "$lo_install/program/libsofficeapp.so" && ! -f "$lo_install/program/libmergedlo.so" ]]; then
-  echo "FAIL: LibreOfficeKit runtime library not found below $lo_install/program" >&2
+if [[ ! -f "$lo_program/libsofficeapp.so" && ! -f "$lo_program/libmergedlo.so" ]]; then
+  echo "FAIL: LibreOfficeKit runtime library not found in $lo_program" >&2
   exit 69
 fi
 
@@ -66,7 +66,7 @@ mkdir -p "$profile_dir"
   -ldl \
   -o "$probe_binary"
 
-args=("$lo_install" "$profile_dir" "$source_document")
+args=("$lo_program" "$profile_dir" "$source_document")
 if [[ -n "$output_document" ]]; then
   args+=("$output_document")
 else
