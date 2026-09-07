@@ -43,5 +43,5 @@ public sealed record LibreOfficeWriteEngineOptions
     }
 
     private static bool IsAbsoluteTargetPath(string value) =>
-        value.StartsWith('/', StringComparison.Ordinal) || Path.IsPathFullyQualified(value);
+        value.StartsWith("/", StringComparison.Ordinal) || Path.IsPathFullyQualified(value);
 }
