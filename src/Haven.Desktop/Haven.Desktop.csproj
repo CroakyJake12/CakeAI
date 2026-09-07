@@ -53,6 +53,9 @@
     <Compile Update="Prefabs\**\*.hui.cs"><DependentUpon>%(Filename)</DependentUpon></Compile>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="../../HavenOS Apps/Write/WriteAppSurface.cs" Link="HavenOS Apps/Write/WriteAppSurface.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <Compile Update="Views\Pages\Go\GoPage.axaml.cs">
       <DependentUpon>GoPage.axaml</DependentUpon>
     </Compile>
