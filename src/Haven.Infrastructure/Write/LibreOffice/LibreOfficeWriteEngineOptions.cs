@@ -8,7 +8,7 @@ public sealed record LibreOfficeWriteEngineOptions
 {
     public bool Enabled { get; init; }
     public string HelperExecutablePath { get; init; } = "/usr/libexec/haven/haven-write-engine";
-    public string LibreOfficeInstallPath { get; init; } = "/usr/lib/libreoffice";
+    public string LibreOfficeProgramPath { get; init; } = "/usr/lib/libreoffice/program";
     public string ProfileRootDirectory { get; init; } = string.Empty;
     public TimeSpan StartupTimeout { get; init; } = TimeSpan.FromSeconds(10);
     public long MaximumTileBytes { get; init; } = 64L * 1024L * 1024L;
@@ -22,10 +22,10 @@ public sealed record LibreOfficeWriteEngineOptions
         else if (!IsAbsoluteTargetPath(HelperExecutablePath))
             errors.Add("The Haven Write helper executable path must be absolute.");
 
-        if (string.IsNullOrWhiteSpace(LibreOfficeInstallPath))
-            errors.Add("A LibreOffice installation path is required.");
-        else if (!IsAbsoluteTargetPath(LibreOfficeInstallPath))
-            errors.Add("The LibreOffice installation path must be absolute.");
+        if (string.IsNullOrWhiteSpace(LibreOfficeProgramPath))
+            errors.Add("A LibreOffice program path is required.");
+        else if (!IsAbsoluteTargetPath(LibreOfficeProgramPath))
+            errors.Add("The LibreOffice program path must be absolute.");
 
         if (!string.IsNullOrWhiteSpace(ProfileRootDirectory)
             && !IsAbsoluteTargetPath(ProfileRootDirectory))
