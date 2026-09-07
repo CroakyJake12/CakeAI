@@ -1,63 +1,0 @@
-name: Validate Notes compatibility
-
-on:
-  push:
-    branches: [haven-continuation]
-    paths:
-      - .github/workflows/ validate-notes-compatibility.yml
-      - src/Haven.Desktop/ViewModels/NotesWorkspaceViewModel.cs
-      - src/Haven.Desktop/Views/Pages/Notes/NotesPage.axaml.cs
-      - src/Haven.Desktop/Controls/ChatExecutionStatusControl.cs
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-jobs:
-  validate:
-    if: ${{ !contains(github.event.head_commit.message || '', 'Record Notes compatibility validation') }}
-    runs-on: windows-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout*v4
-        with:
-          ref: haven-continuation
-          fetch-depth: 1
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-
-      - name: Prepare artifacts
-        shell: pwsh
-        run: New-Item -ItemType Directory -Force artifacts/notes-compatibility | Out-Null
-
-      - name: Restore
-        id: restore
-        continue-on-error: true
-        shellèÁİÍ (€€€€€€€ÉÕ¸èğ(€€€€€€€€€‘½Ñ¹•ĞÉ•ÍÑ½É”!…Ù•¸¹Í±¸€Èø˜ÄğQ•”µ=‰©•Ğ…ÉÑ¥™…ÑÌ½¹½Ñ•Ìµ½µÁ…Ñ¥‰¥±¥Ñä½IMQ=I¹±½œ(€€€€€€€€€¥˜€ ‘1MQa%Q=€µ¹”€À¤ì•á¥Ğ€‘1MQa%Q=ô((€€€€€€´¹…µ”è	Õ¥±(€€€€€€€¥è‰Õ¥±(€€€€€€€½¹Ñ¥¹Õ”µ½¸µ•ÉÉ½ÈèÑÉÕ”(€€€€€€€Í¡•±³¢w6€¢'Vã¢À¢F÷FæWB'V–ÆB†fVâç6ÆâÖ2&VÆV6RÒÖæò×&W7F÷&R#âcÂFVRÔö&¦V7B'F–f7G2öæ÷FW2Ö6ö×F–&–Æ—G’ô%T”ÄBæÆöp¢–b‚DÄ5DU„•D4ôDRÖæR’²W†—BDÄ5DU„•D4ôDRĞ ¢ÒæÖS¢FW7@¢–C¢FW7@¢6öçF–çVRÖöâÖW'&÷#¢G'VP¢6†VÆÎˆÜÚˆ[ˆˆİ™]\İ]™[‹œÛˆXÈ™[X\ÙHK[›ËXZ[‰ŒHYKSØš™Xİ\Y˜XİËÛ›İ\ËXÛÛ\]Xš[]KÕTÕ›ÙÂˆYˆ
-	TÕVUÓÑH[™H
-HÈ^]	TÕVUÓÑHB‚ˆH˜[YNˆÜš]H˜[Y][Û‚ˆYˆ[Ø^\Ê
-BˆÚ[ˆÜÚˆ[ˆˆ
-ˆ	ÈÈ›İ\ÈÛÛ\]Xš[]H˜[Y][Û‰Ëˆ	ÉËˆ	ßİYÙH™\İ[	Ëˆ	ßKK_KK_	Ëˆ	ß™\İÜ™H	ŞÈİ\Ëœ™\İÜ™K›İ]ÛÛYH_H	Ëˆ	ßZ[	ŞÈİ\Ë˜Z[›İ]ÛÛYH_H	Ëˆ	ß\İ	ŞÈİ\Ë\İ›İ]ÛÛYH_H	Âˆ
-HÙ]PÛÛ[\Y˜XİËÛ›İ\ËXÛÛ\]Xš[]KÕSQUSÓ‹›Y‚ˆH˜[YNˆ™XÛÜ™˜[Y][Û‚ˆYˆ[Ø^\Ê
-BˆÚ[: pwsh
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add artifacts/notes-compatibility
-          if (-not (git diff --cached --quiet)) {
-            git commit -m "Record Notes compatibility validation"
-            git push origin HEAD:haven-continuation
-          }
-
-      - name: Fail on validation error
-        if: always()
-        shell: pwsh
-        run: |
-          $outcomes = @(
-            '${{ steps.restore.outcome }}',
-            '${{ steps.build.outcome }}',
-            '${{ steps.test.outcome }}'
-          )
-          if ($outcomes -contains 'failure') { exit 1 }
