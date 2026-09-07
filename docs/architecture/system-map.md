@@ -13,7 +13,7 @@ that best explains the design.
 | Tidal background | Surface-following animated gradient backdrop | `src/Haven.Desktop/Controls/TidalBackground.*` | SurfacePaletteCatalog per surface |
 | Chat | Conversation streaming, tools, attachments; HUI transcript via DynamicUI | `src/Haven.Desktop/Views/Pages/Chat/NewChatPage*.cs`, `ChatHavenScene.cs` | Application chat orchestration, Ollama client |
 | Browser | Embedded browsing, safety policies, private profiles | `src/Haven.Desktop/Views/Pages/Browser/BrowserPage.axaml.cs` (+ scene), `src/Haven.Browser` | Infrastructure WebView integration |
-| Documents (Write/Data/Canvas/Present) | App workspaces hosted by HUI scenes | `src/Haven.Desktop/Views/Pages/{Write,Data,Canvas,Present}` | Core document models |
+| Documents (Write/Data/Canvas/Present) | App workspaces hosted by HUI scenes; Write has an experimental platform-neutral document-engine boundary for a future Linux LibreOfficeKit helper | `src/Haven.Desktop/Views/Pages/{Write,Data,Canvas,Present}`, `docs/architecture/write-libreoffice-engine.md` | Core document models, `IWriteDocumentEngine` |
 | Automations & scheduler | Scheduled actions, worker leases | `src/Haven.Application/Automations/*` | AutomationWorker host process |
 | GenUI (generated UI) | Model-generated surfaces from validated contracts | `src/Haven.Core/GenerativeUi/*`, `src/Haven.Desktop/HavenUI/GenerativeUi/*` | GenUI rules (`docs/GENUI_RULES.md`) |
 | Projector (Android display) | Phone-as-display experiences, execution parity | `src/Haven.Application/Projector/ProjectorExperienceCatalog.cs`, `src/Haven.Android/Projector/*` | GenUI instance store |
