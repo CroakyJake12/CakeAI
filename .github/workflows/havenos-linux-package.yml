@@ -1,0 +1,63 @@
+# FILE DOCUMENTATION
+# Where: .github/workflows/havenos-linux-package.yml in repository CI/build support.
+# What: Verifies the Ubuntu-compatible Haven.Desktop publish path and uploads the tarball produced from real dotnet publish output.
+# Why: Gives the Linux packaging seam direct Ubuntu-runner evidence without changing Windows targeting or claiming HavenOS VM launch.
+name: HavenOS Linux package
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - havenos-main
+    paths:
+      - 'Directory.Build.props'
+      - 'src/**'
+      - 'eng/publish-haven-linux.sh'
+      - '.github/workflows/havenos-linux-package.yml'
+  push:
+    branches:
+      - havenos-main
+      - 'havenos/worker/os-linux-packaging-runtime-20260830'
+    paths:
+      - 'Directory.Build.props'
+      - 'src/**'
+      - 'eng/publish-haven-linux.sh'
+      - '.github/workflows/havenos-linux-package.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  publish-linux-x64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish and package Haven for Linux
+        shell: bash
+        run: bash eng/publish-haven-linux.sh
+
+      - name: Verify packaged publish artifacts
+        shell: bash
+        run: |
+          package='artifacts/linux/linux-x64/haven-linux-linux-x64.tar.gz'
+          test -s "$package"
+          tar -tzf "$package" | grep -Fx './Haven'
+          tar -tzf "$package" | grep -Fx './Haven.dll'
+          tar -tzf "$package" | grep -Fx './Haven.runtimeconfig.json'
+
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v4
+        with:
+          name: haven-linux-x64
+          path: artifacts/linux/linux-x64/haven-linux-linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
