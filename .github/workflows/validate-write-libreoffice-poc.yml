@@ -260,15 +260,15 @@ jobs:
                 libreoffice-writer-nogui
 
               for forbidden in libreofficekit-dev liblibreofficekitgtk gir1.2-lokdocview-0.1 libreoffice-gtk3; do
-                if dpkg-query -W -f="${Status}" "$forbidden" 2>/dev/null | grep -q "install ok installed"; then
+                if dpkg-query -W -f="\${Status}" "$forbidden" 2>/dev/null | grep -q "install ok installed"; then
                   echo "FAIL: forbidden build/UI package is installed in runtime-only container: $forbidden" >&2
                   exit 1
                 fi
               done
 
-              if dpkg-query -W -f="${binary:Package}\n" | grep -Eq "^libgtk-[0-9]"; then
+              if dpkg-query -W -f="\${binary:Package}\n" | grep -Eq "^libgtk-[0-9]"; then
                 echo "FAIL: GTK runtime package unexpectedly entered the headless runtime closure" >&2
-                dpkg-query -W -f="${binary:Package}\t${Version}\n" | grep -E "^libgtk-" >&2 || true
+                dpkg-query -W -f="\${binary:Package}\t\${Version}\n" | grep -E "^libgtk-" >&2 || true
                 exit 1
               fi
 
@@ -289,7 +289,7 @@ jobs:
 
               test -s /io/roundtrip.odt
               test "$(stat -c %s /io/tile.rgba)" -eq $((512 * 512 * 4))
-              dpkg-query -W -f="${Package}\t${Version}\n" \
+              dpkg-query -W -f="\${Package}\t\${Version}\n" \
                 libreoffice-core-nogui \
                 libreoffice-writer-nogui > /io/runtime-package-versions.txt
             '
