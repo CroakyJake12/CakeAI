@@ -49,14 +49,17 @@ public sealed record WriteEngineCapabilities(
     bool SupportsTiledRendering,
     bool SupportsTextInput,
     bool SupportsPointerInput,
-    bool SupportsUnoCommands,
+    bool SupportsSemanticCommands,
     bool SupportsAccessibilitySnapshot,
     bool UsesUnstableUpstreamApi);
 
+/// <summary>
+/// Requests opening one user document. Provider/runtime profile selection is deliberately
+/// not exposed here; the engine implementation owns its isolated runtime profile.
+/// </summary>
 public sealed record WriteEngineOpenRequest(
     string SourcePath,
-    bool ReadOnly = false,
-    string? UserProfileDirectory = null);
+    bool ReadOnly = false);
 
 public sealed record WriteEngineDocumentState(
     string SourcePath,
@@ -113,13 +116,12 @@ public enum WriteEnginePointerEventType
 }
 
 /// <summary>
-/// Semantic engine command. The implementation validates command names and arguments;
-/// callers must not use this as an unrestricted native-command escape hatch.
+/// Semantic application command. Implementations must translate an allow-listed command
+/// to their native engine operation; this is not a raw provider-command escape hatch.
 /// </summary>
 public sealed record WriteEngineCommand(
     string Name,
-    string? ArgumentsJson = null,
-    bool NotifyWhenFinished = true);
+    string? ArgumentsJson = null);
 
 public sealed record WriteEngineAccessibilitySnapshot(
     bool Available,
