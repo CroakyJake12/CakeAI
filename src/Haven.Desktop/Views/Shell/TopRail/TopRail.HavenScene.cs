@@ -36,7 +36,11 @@ public sealed partial class TopRail
             _havenOwnedScene.BackRequested += (_, _) => InvokeBackAction();
             _havenOwnedScene.ForwardRequested += (_, _) => InvokeForwardAction();
             _havenOwnedScene.AppsRequested += (_, _) => InvokeAppsAction();
-            _havenOwnedScene.ActionsRequested += (_, _) => InvokeActionsAction();
+            _havenOwnedScene.ActionsRequested += (_, _) =>
+            {
+                InvokeActionsAction();
+                ShowActions();
+            };
             _havenOwnedScene.ModelRequested += (_, _) => InvokeModelAction();
             _havenOwnedScene.NotificationsRequested += (_, _) => InvokeNotificationsAction();
             _havenOwnedScene.SearchRequested += (_, _) => InvokeSearchAction();
